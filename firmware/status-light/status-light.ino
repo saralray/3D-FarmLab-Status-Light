@@ -1,0 +1,498 @@
+/*
+ * 3D FarmLab — ESP32-C3 Printer Status Light
+ * ============================================
+ *
+ * Firmware that polls a 3D printer farm dashboard for printer status
+ * and displays it via a WS2812B (NeoPixel) RGB LED.
+ *
+ * Features:
+ *   - Reads WiFi + server config from NVS (non-volatile storage)
+ *   - Serial provisioning protocol (JSON commands at 115200 baud)
+ *   - Non-blocking LED animations for each status
+ *   - Auto-reconnect on WiFi loss
+ *   - Error state after consecutive HTTP failures
+ *
+ * Hardware:
+ *   - ESP32-C3 (Super Mini or Dev Module)
+ *   - WS2812B / NeoPixel LED on GPIO8
+ *
+ * Libraries (install via Arduino Library Manager):
+ *   - Adafruit NeoPixel
+ *   - ArduinoJson (v7+)
+ *
+ * License: MIT
+ */
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
+#include <ArduinoJson.h>
+#include <Adafruit_NeoPixel.h>
+#include "config.h"
+
+// ─── Globals ────────────────────────────────────────────────────────────────
+
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+Preferences prefs;
+
+// Config from NVS
+String cfgSSID        = "";
+String cfgPassword    = "";
+String cfgServerUrl   = "";
+String cfgPrinterId   = "";
+uint32_t cfgPollInterval = DEFAULT_POLL_INTERVAL_MS;
+
+// Runtime state
+DeviceState  deviceState       = STATE_PROVISIONING;
+PrinterStatus printerStatus    = STATUS_UNKNOWN;
+int          consecutiveErrors = 0;
+unsigned long lastPollTime     = 0;
+unsigned long lastWifiAttempt  = 0;
+unsigned long stateEnteredAt   = 0;
+
+// Serial input buffer
+String serialBuffer = "";
+
+// ─── Forward Declarations ───────────────────────────────────────────────────
+
+void loadConfig();
+void saveConfig();
+void handleSerial();
+void connectWiFi();
+void pollPrinterStatus();
+void updateLED();
+void setDeviceState(DeviceState newState);
+PrinterStatus parseStatus(const String& s);
+
+// LED animation helpers
+void ledSolid(uint8_t r, uint8_t g, uint8_t b);
+void ledBreathing(uint8_t r, uint8_t g, uint8_t b, float freqHz);
+void ledBlink(uint8_t r, uint8_t g, uint8_t b, float freqHz);
+void ledTripleBlink(uint8_t r, uint8_t g, uint8_t b);
+void ledRainbow();
+void ledOff();
+
+// ─── Setup ──────────────────────────────────────────────────────────────────
+
+void setup() {
+  Serial.begin(SERIAL_BAUD);
+  delay(500);  // Allow serial to initialize
+
+  // Initialize LED
+  strip.begin();
+  strip.setBrightness(LED_BRIGHTNESS);
+  strip.show();
+
+  Serial.println();
+  Serial.println("╔══════════════════════════════════════╗");
+  Serial.println("║  3D FarmLab Status Light  v" FW_VERSION "    ║");
+  Serial.println("╚══════════════════════════════════════╝");
+  Serial.println();
+
+  // Load config from NVS
+  loadConfig();
+
+  if (cfgSSID.length() == 0 || cfgServerUrl.length() == 0 || cfgPrinterId.length() == 0) {
+    Serial.println("[BOOT] No configuration found. Entering provisioning mode.");
+    Serial.println("[BOOT] Send JSON config via serial to provision this device.");
+    Serial.println("[BOOT] Example: {\"cmd\":\"provision\",\"ssid\":\"...\",\"password\":\"...\",\"serverUrl\":\"...\",\"printerId\":\"...\",\"pollInterval\":10000}");
+    setDeviceState(STATE_PROVISIONING);
+  } else {
+    Serial.println("[BOOT] Configuration loaded:");
+    Serial.println("  SSID:         " + cfgSSID);
+    Serial.println("  Server:       " + cfgServerUrl);
+    Serial.println("  Printer ID:   " + cfgPrinterId);
+    Serial.println("  Poll Interval: " + String(cfgPollInterval) + "ms");
+    Serial.println();
+    setDeviceState(STATE_WIFI_CONNECTING);
+    connectWiFi();
+  }
+}
+
+// ─── Main Loop ──────────────────────────────────────────────────────────────
+
+void loop() {
+  // Always listen for serial commands
+  handleSerial();
+
+  unsigned long now = millis();
+
+  switch (deviceState) {
+    case STATE_PROVISIONING:
+      // Just animate rainbow and wait for serial config
+      break;
+
+    case STATE_WIFI_CONNECTING:
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("[WIFI] Connected! IP: " + WiFi.localIP().toString());
+        setDeviceState(STATE_RUNNING);
+        consecutiveErrors = 0;
+        lastPollTime = 0;  // Poll immediately
+      } else if (now - stateEnteredAt > WIFI_CONNECT_TIMEOUT_MS) {
+        Serial.println("[WIFI] Connection timeout. Will retry in " + String(WIFI_RETRY_INTERVAL_MS / 1000) + "s");
+        setDeviceState(STATE_WIFI_FAILED);
+      }
+      break;
+
+    case STATE_WIFI_FAILED:
+      if (now - stateEnteredAt > WIFI_RETRY_INTERVAL_MS) {
+        Serial.println("[WIFI] Retrying connection...");
+        setDeviceState(STATE_WIFI_CONNECTING);
+        connectWiFi();
+      }
+      break;
+
+    case STATE_RUNNING:
+      // Check WiFi still connected
+      if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WIFI] Disconnected! Reconnecting...");
+        setDeviceState(STATE_WIFI_CONNECTING);
+        connectWiFi();
+        break;
+      }
+      // Poll on interval
+      if (now - lastPollTime >= cfgPollInterval) {
+        pollPrinterStatus();
+        lastPollTime = now;
+      }
+      break;
+
+    case STATE_HTTP_ERROR:
+      // Check WiFi
+      if (WiFi.status() != WL_CONNECTED) {
+        setDeviceState(STATE_WIFI_CONNECTING);
+        connectWiFi();
+        break;
+      }
+      // Keep trying on interval
+      if (now - lastPollTime >= cfgPollInterval) {
+        pollPrinterStatus();
+        lastPollTime = now;
+      }
+      break;
+  }
+
+  // Update LED animation every loop iteration
+  updateLED();
+  delay(10);  // ~100Hz LED update rate
+}
+
+// ─── Config Management ──────────────────────────────────────────────────────
+
+void loadConfig() {
+  prefs.begin(NVS_NAMESPACE, true);  // Read-only
+  cfgSSID         = prefs.getString(NVS_KEY_SSID, "");
+  cfgPassword     = prefs.getString(NVS_KEY_PASSWORD, "");
+  cfgServerUrl    = prefs.getString(NVS_KEY_SERVER_URL, "");
+  cfgPrinterId    = prefs.getString(NVS_KEY_PRINTER_ID, "");
+  cfgPollInterval = prefs.getUInt(NVS_KEY_POLL_INT, DEFAULT_POLL_INTERVAL_MS);
+  prefs.end();
+}
+
+void saveConfig() {
+  prefs.begin(NVS_NAMESPACE, false);  // Read-write
+  prefs.putString(NVS_KEY_SSID, cfgSSID);
+  prefs.putString(NVS_KEY_PASSWORD, cfgPassword);
+  prefs.putString(NVS_KEY_SERVER_URL, cfgServerUrl);
+  prefs.putString(NVS_KEY_PRINTER_ID, cfgPrinterId);
+  prefs.putUInt(NVS_KEY_POLL_INT, cfgPollInterval);
+  prefs.end();
+}
+
+void clearConfig() {
+  prefs.begin(NVS_NAMESPACE, false);
+  prefs.clear();
+  prefs.end();
+}
+
+// ─── Serial Provisioning ────────────────────────────────────────────────────
+
+void handleSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      serialBuffer.trim();
+      if (serialBuffer.length() > 0) {
+        processSerialCommand(serialBuffer);
+        serialBuffer = "";
+      }
+    } else {
+      serialBuffer += c;
+      // Prevent buffer overflow
+      if (serialBuffer.length() > 1024) {
+        serialBuffer = "";
+      }
+    }
+  }
+}
+
+void processSerialCommand(const String& line) {
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, line);
+
+  if (err) {
+    Serial.println("{\"status\":\"error\",\"msg\":\"Invalid JSON: " + String(err.c_str()) + "\"}");
+    return;
+  }
+
+  const char* cmd = doc["cmd"] | "";
+
+  // ── provision ─────────────────────────────────────────────────────────
+  if (strcmp(cmd, "provision") == 0) {
+    const char* ssid      = doc["ssid"] | "";
+    const char* password  = doc["password"] | "";
+    const char* serverUrl = doc["serverUrl"] | "";
+    const char* printerId = doc["printerId"] | "";
+    uint32_t pollInt      = doc["pollInterval"] | DEFAULT_POLL_INTERVAL_MS;
+
+    if (strlen(ssid) == 0 || strlen(serverUrl) == 0 || strlen(printerId) == 0) {
+      Serial.println("{\"status\":\"error\",\"msg\":\"Missing required fields: ssid, serverUrl, printerId\"}");
+      return;
+    }
+
+    cfgSSID         = String(ssid);
+    cfgPassword     = String(password);
+    cfgServerUrl    = String(serverUrl);
+    cfgPrinterId    = String(printerId);
+    cfgPollInterval = pollInt;
+
+    saveConfig();
+
+    Serial.println("{\"status\":\"ok\",\"msg\":\"Config saved. Rebooting...\"}");
+    Serial.flush();
+    delay(1000);
+    ESP.restart();
+  }
+
+  // ── status ────────────────────────────────────────────────────────────
+  else if (strcmp(cmd, "status") == 0) {
+    JsonDocument resp;
+    resp["status"]        = "ok";
+    resp["firmware"]      = FW_VERSION;
+    resp["ssid"]          = cfgSSID;
+    resp["serverUrl"]     = cfgServerUrl;
+    resp["printerId"]     = cfgPrinterId;
+    resp["pollInterval"]  = cfgPollInterval;
+    resp["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
+    if (WiFi.status() == WL_CONNECTED) {
+      resp["ip"] = WiFi.localIP().toString();
+    }
+    resp["deviceState"]   = (int)deviceState;
+    resp["printerStatus"] = (int)printerStatus;
+
+    String out;
+    serializeJson(resp, out);
+    Serial.println(out);
+  }
+
+  // ── reset ─────────────────────────────────────────────────────────────
+  else if (strcmp(cmd, "reset") == 0) {
+    clearConfig();
+    Serial.println("{\"status\":\"ok\",\"msg\":\"Config cleared. Rebooting...\"}");
+    Serial.flush();
+    delay(1000);
+    ESP.restart();
+  }
+
+  // ── ping ──────────────────────────────────────────────────────────────
+  else if (strcmp(cmd, "ping") == 0) {
+    Serial.println("{\"status\":\"ok\",\"msg\":\"pong\",\"firmware\":\"" FW_VERSION "\"}");
+  }
+
+  // ── unknown ───────────────────────────────────────────────────────────
+  else {
+    Serial.println("{\"status\":\"error\",\"msg\":\"Unknown command: " + String(cmd) + "\"}");
+  }
+}
+
+// ─── WiFi ───────────────────────────────────────────────────────────────────
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(cfgSSID.c_str(), cfgPassword.c_str());
+  Serial.println("[WIFI] Connecting to: " + cfgSSID);
+}
+
+// ─── HTTP Polling ───────────────────────────────────────────────────────────
+
+void pollPrinterStatus() {
+  // Build URL: <serverUrl>/api/status-light/printers/<printerId>
+  String url = cfgServerUrl;
+  // Remove trailing slash if present
+  if (url.endsWith("/")) {
+    url = url.substring(0, url.length() - 1);
+  }
+  url += "/api/status-light/printers/" + cfgPrinterId;
+
+  Serial.println("[HTTP] GET " + url);
+
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.begin(url);
+  http.addHeader("Accept", "application/json");
+
+  int httpCode = http.GET();
+
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    Serial.println("[HTTP] 200 OK: " + payload);
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload);
+
+    if (!err) {
+      const char* statusStr = doc["status"] | "unknown";
+      printerStatus = parseStatus(String(statusStr));
+      consecutiveErrors = 0;
+
+      if (deviceState == STATE_HTTP_ERROR) {
+        setDeviceState(STATE_RUNNING);
+      }
+    } else {
+      Serial.println("[HTTP] JSON parse error: " + String(err.c_str()));
+      consecutiveErrors++;
+    }
+  } else {
+    Serial.println("[HTTP] Error: " + String(httpCode) + " " + http.errorToString(httpCode));
+    consecutiveErrors++;
+  }
+
+  http.end();
+
+  // Check if we've hit the error threshold
+  if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS && deviceState != STATE_HTTP_ERROR) {
+    Serial.println("[HTTP] " + String(MAX_CONSECUTIVE_ERRORS) + " consecutive errors — entering error state");
+    setDeviceState(STATE_HTTP_ERROR);
+  }
+}
+
+PrinterStatus parseStatus(const String& s) {
+  if (s == "idle")     return STATUS_IDLE;
+  if (s == "printing") return STATUS_PRINTING;
+  if (s == "paused")   return STATUS_PAUSED;
+  if (s == "error")    return STATUS_ERROR;
+  if (s == "offline")  return STATUS_OFFLINE;
+  return STATUS_UNKNOWN;
+}
+
+// ─── LED Animations ─────────────────────────────────────────────────────────
+
+void setDeviceState(DeviceState newState) {
+  deviceState = newState;
+  stateEnteredAt = millis();
+}
+
+void updateLED() {
+  switch (deviceState) {
+    case STATE_PROVISIONING:
+      ledRainbow();
+      break;
+
+    case STATE_WIFI_CONNECTING:
+      ledBlink(COLOR_WIFI_R, COLOR_WIFI_G, COLOR_WIFI_B, 4.0);  // 4Hz fast blink
+      break;
+
+    case STATE_WIFI_FAILED:
+      ledBreathing(COLOR_ERROR_R, COLOR_ERROR_G, COLOR_ERROR_B, 0.5);  // Slow red pulse
+      break;
+
+    case STATE_HTTP_ERROR:
+      ledTripleBlink(COLOR_HTTP_ERR_R, COLOR_HTTP_ERR_G, COLOR_HTTP_ERR_B);
+      break;
+
+    case STATE_RUNNING:
+      switch (printerStatus) {
+        case STATUS_IDLE:
+          ledSolid(COLOR_IDLE_R, COLOR_IDLE_G, COLOR_IDLE_B);
+          break;
+        case STATUS_PRINTING:
+          ledBreathing(COLOR_PRINTING_R, COLOR_PRINTING_G, COLOR_PRINTING_B, 1.0);
+          break;
+        case STATUS_PAUSED:
+          ledSolid(COLOR_PAUSED_R, COLOR_PAUSED_G, COLOR_PAUSED_B);
+          break;
+        case STATUS_ERROR:
+          ledBlink(COLOR_ERROR_R, COLOR_ERROR_G, COLOR_ERROR_B, 2.0);  // 2Hz fast pulse
+          break;
+        case STATUS_OFFLINE:
+          ledBreathing(COLOR_OFFLINE_R, COLOR_OFFLINE_G, COLOR_OFFLINE_B, 0.5);
+          break;
+        default:
+          ledBreathing(COLOR_WIFI_R, COLOR_WIFI_G, COLOR_WIFI_B, 0.5);
+          break;
+      }
+      break;
+  }
+}
+
+// ── Solid color ─────────────────────────────────────────────────────────────
+
+void ledSolid(uint8_t r, uint8_t g, uint8_t b) {
+  strip.setPixelColor(0, strip.Color(r, g, b));
+  strip.show();
+}
+
+// ── Breathing effect (smooth sine-wave brightness) ──────────────────────────
+
+void ledBreathing(uint8_t r, uint8_t g, uint8_t b, float freqHz) {
+  float phase = (millis() % (unsigned long)(1000.0 / freqHz)) / (1000.0 / freqHz);
+  float brightness = (sin(phase * 2.0 * PI) + 1.0) / 2.0;  // 0.0 → 1.0
+  brightness = brightness * 0.85 + 0.15;  // Keep minimum 15% brightness
+
+  strip.setPixelColor(0, strip.Color(
+    (uint8_t)(r * brightness),
+    (uint8_t)(g * brightness),
+    (uint8_t)(b * brightness)
+  ));
+  strip.show();
+}
+
+// ── Blink (on/off at frequency) ─────────────────────────────────────────────
+
+void ledBlink(uint8_t r, uint8_t g, uint8_t b, float freqHz) {
+  unsigned long period = (unsigned long)(1000.0 / freqHz);
+  bool on = (millis() % period) < (period / 2);
+
+  if (on) {
+    strip.setPixelColor(0, strip.Color(r, g, b));
+  } else {
+    strip.setPixelColor(0, strip.Color(0, 0, 0));
+  }
+  strip.show();
+}
+
+// ── Triple blink pattern (blink 3x, pause, repeat) ─────────────────────────
+
+void ledTripleBlink(uint8_t r, uint8_t g, uint8_t b) {
+  unsigned long cycle = millis() % 2000;  // 2-second cycle
+
+  // Three 100ms blinks at 0, 300, 600ms, then dark for the rest
+  bool on = false;
+  if (cycle < 100)                      on = true;
+  else if (cycle >= 300 && cycle < 400) on = true;
+  else if (cycle >= 600 && cycle < 700) on = true;
+
+  if (on) {
+    strip.setPixelColor(0, strip.Color(r, g, b));
+  } else {
+    strip.setPixelColor(0, strip.Color(0, 0, 0));
+  }
+  strip.show();
+}
+
+// ── Rainbow cycle (provisioning mode) ───────────────────────────────────────
+
+void ledRainbow() {
+  uint16_t hue = (millis() / 10) % 65536;  // Full cycle every ~655ms
+  uint32_t color = strip.gamma32(strip.ColorHSV(hue));
+  strip.setPixelColor(0, color);
+  strip.show();
+}
+
+// ── Turn LED off ────────────────────────────────────────────────────────────
+
+void ledOff() {
+  strip.setPixelColor(0, strip.Color(0, 0, 0));
+  strip.show();
+}

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D FarmLab — Status Light Flasher</title>
+  <meta name="description" content="Flash your ESP32-C3 with 3D FarmLab status light firmware directly from your browser. Configure WiFi, server URL, and printer ID in one click." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <!-- Ambient glow orbs -->
+  <div class="ambient-orb orb-1"></div>
+  <div class="ambient-orb orb-2"></div>
+  <div class="ambient-orb orb-3"></div>
+
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="2" width="28" height="28" rx="6" fill="url(#logo-grad)" />
+            <circle cx="16" cy="16" r="6" fill="white" opacity="0.9" />
+            <circle cx="16" cy="16" r="3" fill="url(#logo-grad)" />
+            <defs>
+              <linearGradient id="logo-grad" x1="0" y1="0" x2="32" y2="32">
+                <stop stop-color="#6366f1" />
+                <stop offset="1" stop-color="#8b5cf6" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <h1>3D FarmLab</h1>
+          <span class="logo-subtitle">Status Light Flasher</span>
+        </div>
+      </div>
+      <div class="header-badge" id="browserSupport">
+        <span class="badge-dot"></span>
+        <span class="badge-text">Checking browser…</span>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Step Indicator -->
+      <div class="steps">
+        <div class="step active" data-step="1">
+          <div class="step-number">1</div>
+          <div class="step-label">Connect</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" data-step="2">
+          <div class="step-number">2</div>
+          <div class="step-label">Flash</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" data-step="3">
+          <div class="step-number">3</div>
+          <div class="step-label">Configure</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" data-step="4">
+          <div class="step-number">4</div>
+          <div class="step-label">Done</div>
+        </div>
+      </div>
+
+      <!-- Panel Container -->
+      <div class="panel-container">
+
+        <!-- Step 1: Connect -->
+        <section class="panel" id="panelConnect">
+          <div class="panel-icon">
+            <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M32 8C18.745 8 8 18.745 8 32s10.745 24 24 24 24-10.745 24-24S45.255 8 32 8z" stroke="url(#connect-grad)" stroke-width="2.5" fill="none" />
+              <path d="M20 32h8m0 0v-8m0 8l-6 6" stroke="url(#connect-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M44 32h-8m0 0v8m0-8l6-6" stroke="url(#connect-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+              <defs>
+                <linearGradient id="connect-grad" x1="8" y1="8" x2="56" y2="56">
+                  <stop stop-color="#6366f1" />
+                  <stop offset="1" stop-color="#a78bfa" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h2 class="panel-title">Connect Your Device</h2>
+          <p class="panel-desc">
+            Plug your ESP32-C3 into USB and click the button below.
+            Your browser will ask you to select the serial port.
+          </p>
+          <div class="panel-hint">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 10.5a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5zM8.75 8a.75.75 0 0 1-1.5 0V5a.75.75 0 0 1 1.5 0v3z"/></svg>
+            <span>Some boards need the <strong>BOOT</strong> button held while plugging in USB.</span>
+          </div>
+          <button class="btn btn-primary btn-lg" id="btnConnect">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M13 3H7a4 4 0 0 0-4 4v6a4 4 0 0 0 4 4h6a4 4 0 0 0 4-4V7a4 4 0 0 0-4-4zm-3 11a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm2-4H8a1 1 0 0 1 0-2h4a1 1 0 0 1 0 2z"/></svg>
+            Connect ESP32-C3
+          </button>
+          <div class="chip-info" id="chipInfo" style="display:none">
+            <span class="chip-label">Detected:</span>
+            <span class="chip-value" id="chipName">—</span>
+          </div>
+        </section>
+
+        <!-- Step 2: Flash -->
+        <section class="panel hidden" id="panelFlash">
+          <div class="panel-icon">
+            <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M35 8L18 36h12l-4 20 20-28H34l4-20z" stroke="url(#flash-grad)" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+              <defs>
+                <linearGradient id="flash-grad" x1="18" y1="8" x2="46" y2="56">
+                  <stop stop-color="#f59e0b" />
+                  <stop offset="1" stop-color="#ef4444" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h2 class="panel-title">Flash Firmware</h2>
+          <p class="panel-desc">
+            Ready to flash the 3D FarmLab Status Light firmware. This will
+            erase existing firmware and write the new one.
+          </p>
+          <div class="progress-container" id="progressContainer" style="display:none">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-text" id="progressText">0%</div>
+          </div>
+          <button class="btn btn-primary btn-lg" id="btnFlash">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M11 3L4 11h5l-1 6 7-8h-5l1-6z"/></svg>
+            Flash Firmware
+          </button>
+        </section>
+
+        <!-- Step 3: Configure -->
+        <section class="panel hidden" id="panelConfig">
+          <div class="panel-icon">
+            <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="32" cy="32" r="22" stroke="url(#config-grad)" stroke-width="2.5" fill="none" />
+              <path d="M32 18v4M32 42v4M18 32h4M42 32h4M22.1 22.1l2.8 2.8M39.1 39.1l2.8 2.8M22.1 41.9l2.8-2.8M39.1 24.9l2.8-2.8" stroke="url(#config-grad)" stroke-width="2.5" stroke-linecap="round" />
+              <circle cx="32" cy="32" r="8" stroke="url(#config-grad)" stroke-width="2.5" fill="none" />
+              <defs>
+                <linearGradient id="config-grad" x1="10" y1="10" x2="54" y2="54">
+                  <stop stop-color="#10b981" />
+                  <stop offset="1" stop-color="#06b6d4" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h2 class="panel-title">Configure Device</h2>
+          <p class="panel-desc">
+            Enter your WiFi credentials and print farm details.
+            This data is sent directly to the device over USB — it never leaves your browser.
+          </p>
+          <form class="config-form" id="configForm" autocomplete="off">
+            <div class="form-group">
+              <label for="inputSSID">WiFi Network (SSID)</label>
+              <input type="text" id="inputSSID" placeholder="e.g. PrintFarm-5G" required />
+            </div>
+            <div class="form-group">
+              <label for="inputPassword">WiFi Password</label>
+              <div class="input-password-wrap">
+                <input type="password" id="inputPassword" placeholder="••••••••" required />
+                <button type="button" class="btn-eye" id="btnTogglePass" title="Show password">
+                  <svg id="eyeIcon" width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path d="M10 4C4 4 1 10 1 10s3 6 9 6 9-6 9-6-3-6-9-6zm0 10a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="form-divider"></div>
+            <div class="form-group">
+              <label for="inputServerUrl">PrintFarm Server URL</label>
+              <input type="url" id="inputServerUrl" placeholder="https://farm.example.com" required />
+              <span class="form-hint">The base URL of your 3D FarmLab dashboard</span>
+            </div>
+            <div class="form-group">
+              <label for="inputPrinterId">Printer ID</label>
+              <input type="text" id="inputPrinterId" placeholder="e.g. printer-01" required />
+              <span class="form-hint">Matches the printer ID in your dashboard</span>
+            </div>
+            <div class="form-group">
+              <label for="inputPollInterval">Poll Interval (seconds)</label>
+              <input type="number" id="inputPollInterval" value="10" min="2" max="300" required />
+              <span class="form-hint">How often the device checks printer status (2–300s)</span>
+            </div>
+            <button type="submit" class="btn btn-primary btn-lg" id="btnProvision">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M17 10l-7 7-7-7 1.4-1.4L9 13.2V3h2v10.2l4.6-4.6L17 10z"/></svg>
+              Send Configuration
+            </button>
+          </form>
+        </section>
+
+        <!-- Step 4: Done -->
+        <section class="panel hidden" id="panelDone">
+          <div class="panel-icon done-icon">
+            <svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="40" cy="40" r="34" stroke="url(#done-grad)" stroke-width="3" fill="none" />
+              <path d="M26 40l10 10 18-20" stroke="url(#done-grad)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+              <defs>
+                <linearGradient id="done-grad" x1="6" y1="6" x2="74" y2="74">
+                  <stop stop-color="#10b981" />
+                  <stop offset="1" stop-color="#34d399" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h2 class="panel-title">You're All Set!</h2>
+          <p class="panel-desc">
+            Your ESP32-C3 has been flashed and configured. It will now connect to WiFi
+            and start displaying your printer's status via the RGB LED.
+          </p>
+          <div class="status-legend">
+            <h3>LED Color Guide</h3>
+            <div class="legend-grid">
+              <div class="legend-item">
+                <span class="legend-dot" style="background:#00b400"></span>
+                <span>Idle — Solid green</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot legend-pulse" style="background:#0050ff"></span>
+                <span>Printing — Blue breathing</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot" style="background:#ffa000"></span>
+                <span>Paused — Amber</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot legend-blink" style="background:#ff0000"></span>
+                <span>Error — Red pulse</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot legend-pulse" style="background:#888"></span>
+                <span>Offline — Dim white pulse</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot legend-rainbow"></span>
+                <span>Rainbow — Waiting for config</span>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-lg" id="btnStartOver">
+            Flash Another Device
+          </button>
+        </section>
+      </div>
+
+      <!-- Terminal -->
+      <details class="terminal-container" id="terminalContainer">
+        <summary class="terminal-header">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3zm3 2L3.5 6.5 5 8l-1.5 1.5L5 11h0M8 11h3"/></svg>
+          Serial Console
+        </summary>
+        <div class="terminal" id="terminal"></div>
+      </details>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <p>
+        3D FarmLab Status Light · <a href="https://github.com" target="_blank" rel="noopener">GitHub</a> ·
+        Requires Chrome, Edge, or Opera
+      </p>
+    </footer>
+  </div>
+
+  <!-- Unsupported Browser Overlay -->
+  <div class="unsupported-overlay hidden" id="unsupportedOverlay">
+    <div class="unsupported-card">
+      <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="32" cy="32" r="28" stroke="#ef4444" stroke-width="2.5" fill="none" />
+        <path d="M22 22l20 20M42 22L22 42" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" />
+      </svg>
+      <h2>Browser Not Supported</h2>
+      <p>
+        The Web Serial API is required to flash firmware. Please use
+        <strong>Google Chrome</strong>, <strong>Microsoft Edge</strong>, or <strong>Opera</strong>.
+      </p>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

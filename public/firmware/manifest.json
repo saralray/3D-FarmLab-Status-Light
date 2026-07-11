@@ -1,0 +1,13 @@
+{
+  "name": "3D FarmLab Status Light",
+  "version": "1.0.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-C3",
+      "parts": [
+        { "path": "status-light.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

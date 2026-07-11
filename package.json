@@ -1,0 +1,17 @@
+{
+  "name": "3d-farmlab-status-light",
+  "version": "1.0.0",
+  "description": "Web flasher for ESP32-C3 printer status lights — flash firmware and provision WiFi + server config from your browser.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "esptool-js": "^0.5.4"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}
