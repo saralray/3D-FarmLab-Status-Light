@@ -173,9 +173,8 @@ void loop() {
       break;
   }
 
-  // LED disabled — status animation is intentionally off; updateLED() is kept
-  // intact below so the state→color mapping can be restored with one line.
-  ledOff();
+  // Update LED animation every loop iteration
+  updateLED();
   delay(10);  // ~100Hz LED update rate
 }
 
