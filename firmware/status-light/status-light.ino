@@ -25,6 +25,7 @@
 
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <Adafruit_NeoPixel.h>
@@ -329,7 +330,21 @@ void pollPrinterStatus() {
 
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.begin(url);
+
+  // HTTPClient::begin(url) alone leaves an https:// transport with no CA cert
+  // and no setInsecure() — the TLS handshake just hangs until HTTP_TIMEOUT_MS
+  // and fails with -11 (read timeout), never reaching the server. Route HTTPS
+  // through an explicit WiFiClientSecure with cert validation skipped: the
+  // response is a plain, non-secret status string, so trust-on-first-use is
+  // an acceptable tradeoff for a device with no CA store to maintain.
+  WiFiClientSecure secureClient;
+  bool isHttps = url.startsWith("https://");
+  if (isHttps) {
+    secureClient.setInsecure();
+    http.begin(secureClient, url);
+  } else {
+    http.begin(url);
+  }
   http.addHeader("Accept", "application/json");
 
   int httpCode = http.GET();
