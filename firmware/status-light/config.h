@@ -6,8 +6,14 @@
 #define FW_NAME             "3D-FarmLab-Status-Light"
 
 // ─── LED Configuration ──────────────────────────────────────────────────────
-#define LED_PIN             8          // GPIO8 — onboard WS2812B on most ESP32-C3 Super Mini boards
-#define NUM_LEDS            1          // Single status LED
+// Discrete common-cathode RGB LED (3 color legs + shared GND), driven via
+// PWM on 3 GPIOs — NOT an addressable WS2812B. GPIO2/8/9 are ESP32-C3
+// strapping pins (boot mode) and are avoided here.
+#define LED_PIN_R           3          // Red leg, via current-limiting resistor
+#define LED_PIN_G           4          // Green leg, via current-limiting resistor
+#define LED_PIN_B           5          // Blue leg, via current-limiting resistor
+#define LED_PWM_FREQ        5000       // Hz, above flicker threshold
+#define LED_PWM_RESOLUTION  8          // bits — duty cycle range 0-255
 #define LED_BRIGHTNESS      60         // 0–255, keep moderate to avoid glare
 
 // ─── Network Defaults ───────────────────────────────────────────────────────

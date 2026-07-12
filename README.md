@@ -2,7 +2,7 @@ ESP32-C3 Status Light — Web Flasher + Firmware
 
 Project Overview
 
-This repository implements a complete web-based flasher and firmware for an ESP32-C3-based status light that polls a 3D printer farm dashboard and drives an RGB status LED (WS2812/NeoPixel). The goal is a simple, secure, and friendly experience where users can flash a pre-built firmware binary from a Vercel-hosted static web app and provision WiFi + server settings over serial immediately after flashing.
+This repository implements a complete web-based flasher and firmware for an ESP32-C3-based status light that polls a 3D printer farm dashboard and drives an RGB status LED (discrete common-cathode LED, PWM-driven). The goal is a simple, secure, and friendly experience where users can flash a pre-built firmware binary from a Vercel-hosted static web app and provision WiFi + server settings over serial immediately after flashing.
 
 High-level deliverables
 
@@ -88,7 +88,7 @@ ESP32-C3 Arduino Firmware
 Purpose
 
 - Connect to configured WiFi and poll the print farm server endpoint to get printer status for a configured printerId.
-- Map status to a WS2812 LED animation (colors + breathing/pulse effects).
+- Map status to an RGB LED animation (colors + breathing/pulse effects) via PWM on 3 pins.
 - Support serial provisioning: listen on 115200 baud for a single JSON line with "cmd":"provision" and config fields to write to non-volatile storage.
 
 Main behavior
@@ -159,9 +159,8 @@ Serial provisioning protocol (post-flash)
 
 Wiring
 
-- Data pin: GPIO 8 (default) → WS2812B data in. (Many ESP32-C3 "Super Mini" boards have an onboard WS2812 connected to GPIO 8.)
-- 3.3V and GND connected to LED strip's 3.3V and GND. For longer strips or multiple LEDs, use a level shifter and external 5V with proper power supply.
-- If the board's LED pin differs, update firmware/status-light/config.h before compiling.
+- Common-cathode RGB LED: R leg → GPIO 3, G leg → GPIO 4, B leg → GPIO 5 (each through a ~220–330Ω current-limiting resistor), common (cathode) leg → GND. GPIO2/8/9 are avoided as they're ESP32-C3 strapping pins.
+- If your board's LED pins differ, update firmware/status-light/config.h (`LED_PIN_R`/`LED_PIN_G`/`LED_PIN_B`) before compiling.
 
 Security & Safety Notes
 

@@ -3,7 +3,8 @@
  * ============================================
  *
  * Firmware that polls a 3D printer farm dashboard for printer status
- * and displays it via a WS2812B (NeoPixel) RGB LED.
+ * and displays it via a discrete common-cathode RGB LED, driven with PWM
+ * on 3 GPIOs.
  *
  * Features:
  *   - Reads WiFi + server config from NVS (non-volatile storage)
@@ -14,11 +15,12 @@
  *
  * Hardware:
  *   - ESP32-C3 (Super Mini or Dev Module)
- *   - WS2812B / NeoPixel LED on GPIO8
+ *   - Common-cathode RGB LED: R/G/B legs on GPIO3/4/5, common leg to GND
  *
  * Libraries (install via Arduino Library Manager):
- *   - Adafruit NeoPixel
  *   - ArduinoJson (v7+)
+ *
+ * Requires Arduino-ESP32 core 3.x (ledcAttach/ledcWrite pin-based PWM API).
  *
  * License: MIT
  */
@@ -28,12 +30,10 @@
 #include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
-#include <Adafruit_NeoPixel.h>
 #include "config.h"
 
 // ─── Globals ────────────────────────────────────────────────────────────────
 
-Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 Preferences prefs;
 
 // Config from NVS
@@ -66,6 +66,8 @@ void setDeviceState(DeviceState newState);
 PrinterStatus parseStatus(const String& s);
 
 // LED animation helpers
+void setRGB(uint8_t r, uint8_t g, uint8_t b);
+void hsvToRgb(uint16_t hue, uint8_t sat, uint8_t val, uint8_t& r, uint8_t& g, uint8_t& b);
 void ledSolid(uint8_t r, uint8_t g, uint8_t b);
 void ledBreathing(uint8_t r, uint8_t g, uint8_t b, float freqHz);
 void ledBlink(uint8_t r, uint8_t g, uint8_t b, float freqHz);
@@ -79,10 +81,11 @@ void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(500);  // Allow serial to initialize
 
-  // Initialize LED
-  strip.begin();
-  strip.setBrightness(LED_BRIGHTNESS);
-  strip.show();
+  // Initialize LED PWM channels
+  ledcAttach(LED_PIN_R, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  ledcAttach(LED_PIN_G, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  ledcAttach(LED_PIN_B, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  ledOff();
 
   Serial.println();
   Serial.println("╔══════════════════════════════════════╗");
@@ -441,11 +444,20 @@ void updateLED() {
   }
 }
 
+// ── Raw output ───────────────────────────────────────────────────────────────
+// Scales by LED_BRIGHTNESS and writes each channel's PWM duty cycle.
+// Common-cathode: higher duty = brighter, no inversion needed.
+
+void setRGB(uint8_t r, uint8_t g, uint8_t b) {
+  ledcWrite(LED_PIN_R, (uint16_t)r * LED_BRIGHTNESS / 255);
+  ledcWrite(LED_PIN_G, (uint16_t)g * LED_BRIGHTNESS / 255);
+  ledcWrite(LED_PIN_B, (uint16_t)b * LED_BRIGHTNESS / 255);
+}
+
 // ── Solid color ─────────────────────────────────────────────────────────────
 
 void ledSolid(uint8_t r, uint8_t g, uint8_t b) {
-  strip.setPixelColor(0, strip.Color(r, g, b));
-  strip.show();
+  setRGB(r, g, b);
 }
 
 // ── Breathing effect (smooth sine-wave brightness) ──────────────────────────
@@ -455,12 +467,11 @@ void ledBreathing(uint8_t r, uint8_t g, uint8_t b, float freqHz) {
   float brightness = (sin(phase * 2.0 * PI) + 1.0) / 2.0;  // 0.0 → 1.0
   brightness = brightness * 0.85 + 0.15;  // Keep minimum 15% brightness
 
-  strip.setPixelColor(0, strip.Color(
+  setRGB(
     (uint8_t)(r * brightness),
     (uint8_t)(g * brightness),
     (uint8_t)(b * brightness)
-  ));
-  strip.show();
+  );
 }
 
 // ── Blink (on/off at frequency) ─────────────────────────────────────────────
@@ -470,11 +481,10 @@ void ledBlink(uint8_t r, uint8_t g, uint8_t b, float freqHz) {
   bool on = (millis() % period) < (period / 2);
 
   if (on) {
-    strip.setPixelColor(0, strip.Color(r, g, b));
+    setRGB(r, g, b);
   } else {
-    strip.setPixelColor(0, strip.Color(0, 0, 0));
+    setRGB(0, 0, 0);
   }
-  strip.show();
 }
 
 // ── Triple blink pattern (blink 3x, pause, repeat) ─────────────────────────
@@ -489,25 +499,42 @@ void ledTripleBlink(uint8_t r, uint8_t g, uint8_t b) {
   else if (cycle >= 600 && cycle < 700) on = true;
 
   if (on) {
-    strip.setPixelColor(0, strip.Color(r, g, b));
+    setRGB(r, g, b);
   } else {
-    strip.setPixelColor(0, strip.Color(0, 0, 0));
+    setRGB(0, 0, 0);
   }
-  strip.show();
 }
 
 // ── Rainbow cycle (provisioning mode) ───────────────────────────────────────
 
+void hsvToRgb(uint16_t hue, uint8_t sat, uint8_t val, uint8_t& r, uint8_t& g, uint8_t& b) {
+  // hue: 0-359, sat/val: 0-255
+  uint8_t region = hue / 60;
+  uint8_t remainder = (hue % 60) * 255 / 60;
+
+  uint8_t p = (val * (255 - sat)) / 255;
+  uint8_t q = (val * (255 - (sat * remainder) / 255)) / 255;
+  uint8_t t = (val * (255 - (sat * (255 - remainder)) / 255)) / 255;
+
+  switch (region % 6) {
+    case 0: r = val; g = t;   b = p;   break;
+    case 1: r = q;   g = val; b = p;   break;
+    case 2: r = p;   g = val; b = t;   break;
+    case 3: r = p;   g = q;   b = val; break;
+    case 4: r = t;   g = p;   b = val; break;
+    default: r = val; g = p;  b = q;   break;
+  }
+}
+
 void ledRainbow() {
-  uint16_t hue = (millis() / 10) % 65536;  // Full cycle every ~655ms
-  uint32_t color = strip.gamma32(strip.ColorHSV(hue));
-  strip.setPixelColor(0, color);
-  strip.show();
+  uint16_t hue = (millis() / 20) % 360;  // Full cycle every ~7.2s
+  uint8_t r, g, b;
+  hsvToRgb(hue, 255, 255, r, g, b);
+  setRGB(r, g, b);
 }
 
 // ── Turn LED off ────────────────────────────────────────────────────────────
 
 void ledOff() {
-  strip.setPixelColor(0, strip.Color(0, 0, 0));
-  strip.show();
+  setRGB(0, 0, 0);
 }
