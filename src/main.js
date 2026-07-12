@@ -274,18 +274,71 @@ async function flash() {
 
 async function startMonitor() {
   if (!port) return;
-  try {
-    await port.open({ baudRate: PROVISION_BAUD });
-  } catch (err) {
-    // Already open (some stacks keep it open across reset) — carry on.
-    if (!String(err.message).includes('already open')) {
-      log(`Serial monitor error: ${err.message}`, 'error');
-      return;
-    }
+
+  // esptool-js drove this same port during flashing; hand it back to the plain
+  // provisioning link with a clean close→open so we get fresh, unlocked read and
+  // write streams (a reused/half-open handle reads nothing and times out).
+  const reopened = await reopenSerialPort();
+  if (!reopened) {
+    log('Could not reopen the serial port after flashing.', 'error');
+    log('Click "Start over" and reconnect — the flashed device is ready to configure.', 'warning');
+    return;
   }
+  port = reopened;
+
   monitorRunning = true;
   lineBuffer = '';
   readLoop();
+  log('Serial monitor connected.', 'success');
+
+  // The firmware boots ~1s after the reset; give it a moment, then confirm the
+  // link is actually live by pinging it. This surfaces a broken link here
+  // instead of as a mysterious timeout during provisioning.
+  await sleep(1200);
+  try {
+    const pong = await sendCommand({ cmd: 'ping' });
+    if (pong && pong.status === 'ok') {
+      log(`Device online — firmware ${pong.firmware || '?'}.`, 'success');
+    }
+  } catch {
+    log('Device did not answer the initial ping — it may still be booting; provisioning will retry.', 'warning');
+  }
+}
+
+// (Re)open the provisioning link on a clean handle. esptool-js's transport may
+// leave the port open with locked streams, so force a close first, then reopen.
+// Retries a few times while the USB stack settles after the reset.
+async function reopenSerialPort() {
+  // Prefer the handle we already have; fall back to whatever the browser lists.
+  let target = port;
+  try {
+    const granted = await navigator.serial.getPorts();
+    if (!target && granted.length) target = granted[0];
+  } catch { /* getPorts unavailable — stick with the existing handle */ }
+  if (!target) return null;
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    // Force a clean slate — a port left open by esptool won't reopen and its
+    // streams stay locked, so close it (ignoring "already closed") first.
+    try { await target.close(); } catch { /* wasn't open */ }
+    try {
+      await target.open({ baudRate: PROVISION_BAUD });
+      await releaseBootSignals(target);
+      return target;
+    } catch { /* not ready yet — wait and retry */ }
+    await sleep(400);
+  }
+  return null;
+}
+
+// Match a plain serial terminal (DTR off, RTS off) after opening. Harmless on a
+// native-USB ESP32-C3 (it answers in any signal state) but keeps us aligned with
+// a normal monitor and avoids poking the boot/reset strapping on UART-bridge boards.
+async function releaseBootSignals(p) {
+  if (typeof p.setSignals !== 'function') return;
+  try {
+    await p.setSignals({ dataTerminalReady: false, requestToSend: false });
+  } catch { /* signals unsupported on this platform — best effort */ }
 }
 
 async function readLoop() {
