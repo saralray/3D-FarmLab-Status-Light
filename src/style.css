@@ -169,6 +169,30 @@ body::after {
 .header-badge.supported   .badge-dot { background: var(--go);    box-shadow: 0 0 9px rgba(52, 226, 122, 0.7); }
 .header-badge.unsupported .badge-dot { background: var(--alert); box-shadow: 0 0 9px rgba(255, 77, 77, 0.7); }
 
+.header-right { display: flex; align-items: center; gap: 10px; }
+
+/* Theme toggle — matches the badge's instrument styling */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.theme-toggle:hover { color: var(--go); border-color: var(--go); background: var(--go-soft); }
+.theme-toggle:focus-visible { outline: 2px solid var(--go); outline-offset: 2px; }
+.theme-toggle svg { display: block; }
+.theme-toggle .icon-sun  { display: none; }
+.theme-toggle .icon-moon { display: block; }
+:root[data-theme="light"] .theme-toggle .icon-sun  { display: block; }
+:root[data-theme="light"] .theme-toggle .icon-moon { display: none; }
+
 /* ─── Bench layout (persistent beacon rail + work column) ────────────────── */
 
 .bench {
@@ -382,12 +406,16 @@ body::after {
 
 .work { min-width: 0; display: flex; flex-direction: column; gap: 22px; }
 
-/* ─── Step tracker (numbering is honest — the flow is genuinely ordered) ─── */
+/* ─── Step tracker (numbering is honest — the flow is genuinely ordered) ───
+   Full-width band between header and bench: the header logo, this tracker,
+   and the device rail all share one left edge; the device top lines up with
+   the panel top. */
 
 .steps {
   display: flex;
   align-items: center;
   gap: 0;
+  margin-bottom: 24px;
 }
 
 .step {
@@ -916,6 +944,59 @@ details[open] .terminal-header::after { transform: rotate(90deg); }
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+
+/* ─── Light theme ────────────────────────────────────────────────────────────
+   The workbench in daylight. The device board stays dark in both themes —
+   a real board is a real board — so the LED keeps glowing believably. */
+
+:root[data-theme="light"] {
+  --ink:     #eceef1;
+  --panel:   #ffffff;
+  --panel-2: #f3f5f8;
+  --raise:   #e4e8ec;
+
+  --text:     #14161a;
+  --text-dim: #545963;
+  --text-mute:#8b909a;
+
+  /* Signal colours, deepened for contrast on light surfaces */
+  --go:      #12a150;
+  --work:    #2563eb;
+  --caution: #c2790a;
+  --alert:   #dc2626;
+  --offline: #6b7280;
+
+  --go-soft:      rgba(18, 161, 80, 0.10);
+  --work-soft:    rgba(37, 99, 235, 0.09);
+  --caution-soft: rgba(194, 121, 10, 0.10);
+  --alert-soft:   rgba(220, 38, 38, 0.09);
+
+  --line:        rgba(20, 22, 26, 0.10);
+  --line-soft:   rgba(20, 22, 26, 0.06);
+  --line-bright: rgba(20, 22, 26, 0.14);
+  --copper:      rgba(190, 138, 74, 0.32);
+}
+
+/* Perfboard dots + top wash tuned for a light surface */
+:root[data-theme="light"] body::before {
+  background-image: radial-gradient(circle at center, rgba(20, 22, 26, 0.055) 1px, transparent 1.4px);
+}
+:root[data-theme="light"] body::after {
+  background: radial-gradient(ellipse at center, rgba(37, 99, 235, 0.05), transparent 70%);
+}
+
+/* Primary button: deepened green needs light text for AA contrast */
+:root[data-theme="light"] .btn-primary { color: #ffffff; }
+:root[data-theme="light"] .btn-primary:hover { background: #16b25c; }
+:root[data-theme="light"] .btn.loading::before {
+  border-color: rgba(255, 255, 255, 0.4);
+  border-top-color: #ffffff;
+}
+
+/* Panels lift off the light background with a soft shadow instead of a glow */
+:root[data-theme="light"] .panel { box-shadow: 0 14px 34px rgba(20, 22, 26, 0.08); }
+:root[data-theme="light"] .terminal { background: #14161a; color: #c9cdd4; }
+:root[data-theme="light"] .panel-hint { color: #9a6a12; }
 
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 
