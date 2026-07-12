@@ -485,6 +485,18 @@ async function loadDevices() {
   } catch (err) {
     populateDeviceSelect([]);
     log(`Could not load device list: ${err.message || err}`, 'warning');
+    if (err.name === 'TypeError') {
+      // Chrome/Firefox both throw a generic TypeError for both a CORS block and
+      // a DNS/network failure — "Failed to fetch" gives no further detail. Since
+      // the same request works fine outside a browser (e.g. curl), CORS is by
+      // far the more likely cause when the server URL itself is reachable.
+      log(
+        'This usually means the server isn\'t sending an Access-Control-Allow-Origin ' +
+        'header for /api/status-light/devices — browsers block cross-origin reads ' +
+        'without it, even though the endpoint works fine outside a browser.',
+        'warning',
+      );
+    }
     log('You can still type the printer ID manually below.', 'warning');
   } finally {
     setBusy(el.btnLoadDevices, false);
