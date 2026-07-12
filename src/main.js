@@ -22,6 +22,8 @@ const FLASH_BAUD = 460800;             // Fast but reliable on common USB-UART b
 const ROM_BAUD = 115200;               // Initial ROM bootloader speed
 const PROVISION_BAUD = 115200;         // Firmware serial speed (SERIAL_BAUD in config.h)
 const PROVISION_TIMEOUT_MS = 10000;
+const SAVED_CONFIG_KEY = 'farmlab-flasher-config'; // localStorage key for remembered WiFi/server
+const DEVICES_TIMEOUT_MS = 8000;
 
 // ─── DOM ─────────────────────────────────────────────────────────────────────
 
@@ -49,6 +51,11 @@ const el = {
   btnTogglePass: $('btnTogglePass'),
   inputPassword: $('inputPassword'),
   eyeIcon: $('eyeIcon'),
+  inputRemember: $('inputRemember'),
+  inputServerUrl: $('inputServerUrl'),
+  inputPrinterId: $('inputPrinterId'),
+  printerSelect: $('printerSelect'),
+  btnLoadDevices: $('btnLoadDevices'),
   btnStartOver: $('btnStartOver'),
   terminalContainer: $('terminalContainer'),
   terminal: $('terminal'),
@@ -119,6 +126,40 @@ function setProgress(fraction) {
   const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
   el.progressText.textContent = `${pct}%`;
   el.progressFill.style.width = `${pct}%`;
+}
+
+// ─── Remembered WiFi / server config ──────────────────────────────────────────
+
+function loadSavedConfig() {
+  try {
+    const raw = localStorage.getItem(SAVED_CONFIG_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveConfig({ ssid, password, serverUrl }) {
+  try {
+    localStorage.setItem(SAVED_CONFIG_KEY, JSON.stringify({ ssid, password, serverUrl }));
+  } catch { /* storage unavailable — best effort */ }
+}
+
+function clearSavedConfig() {
+  try { localStorage.removeItem(SAVED_CONFIG_KEY); } catch { /* noop */ }
+}
+
+// Fill the form from whatever was remembered last time, then try to populate
+// the device dropdown if we already know the server URL.
+function prefillSavedConfig() {
+  const saved = loadSavedConfig();
+  if (!saved) return;
+  if (saved.ssid) $('inputSSID').value = saved.ssid;
+  if (saved.password) el.inputPassword.value = saved.password;
+  if (saved.serverUrl) {
+    el.inputServerUrl.value = saved.serverUrl;
+    loadDevices();
+  }
 }
 
 // ─── Browser support ──────────────────────────────────────────────────────────
@@ -413,6 +454,71 @@ function sendCommand(payload) {
   });
 }
 
+// ─── Device picker (GET <serverUrl>/api/status-light/devices) ────────────────
+// Public, unauthenticated "frontend mirror" of the devices list — mirrors the
+// path shape of the firmware's own polling endpoint (/api/status-light/printers/:id).
+// The cookie-session dashboard path (/status-light/devices, no /api/ prefix)
+// requires a logged-in session and isn't reachable from this static flasher.
+
+async function loadDevices() {
+  const serverUrl = el.inputServerUrl.value.trim().replace(/\/+$/, '');
+  if (!serverUrl) {
+    log('Enter a server URL first to load the device list.', 'warning');
+    return;
+  }
+
+  setBusy(el.btnLoadDevices, true);
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEVICES_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(`${serverUrl}/api/status-light/devices`, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const devices = Array.isArray(data.devices) ? data.devices : [];
+    populateDeviceSelect(devices);
+    log(`Loaded ${devices.length} device${devices.length === 1 ? '' : 's'} from server.`, 'success');
+  } catch (err) {
+    populateDeviceSelect([]);
+    log(`Could not load device list: ${err.message || err}`, 'warning');
+    log('You can still type the printer ID manually below.', 'warning');
+  } finally {
+    setBusy(el.btnLoadDevices, false);
+  }
+}
+
+function populateDeviceSelect(devices) {
+  const select = el.printerSelect;
+  select.innerHTML = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = devices.length ? 'Select a printer…' : 'No devices found';
+  select.appendChild(placeholder);
+
+  devices
+    .slice()
+    .sort((a, b) => String(a.printerId).localeCompare(String(b.printerId)))
+    .forEach((d) => {
+      const opt = document.createElement('option');
+      opt.value = d.printerId;
+      opt.textContent = `${d.printerId} — ${d.connected ? 'active' : 'offline'}`;
+      select.appendChild(opt);
+    });
+
+  select.disabled = devices.length === 0;
+}
+
+function onPrinterSelectChange() {
+  if (el.printerSelect.value) {
+    el.inputPrinterId.value = el.printerSelect.value;
+  }
+}
+
 // ─── Step 3: Configure / provision ────────────────────────────────────────────
 
 async function provision(event) {
@@ -425,10 +531,16 @@ async function provision(event) {
       cmd: 'provision',
       ssid: $('inputSSID').value.trim(),
       password: el.inputPassword.value,
-      serverUrl: $('inputServerUrl').value.trim(),
-      printerId: $('inputPrinterId').value.trim(),
+      serverUrl: el.inputServerUrl.value.trim(),
+      printerId: el.inputPrinterId.value.trim(),
       pollInterval: Math.round(seconds * 1000),
     };
+
+    if (el.inputRemember.checked) {
+      saveConfig({ ssid: payload.ssid, password: payload.password, serverUrl: payload.serverUrl });
+    } else {
+      clearSavedConfig();
+    }
 
     // Don't print the WiFi password to the console.
     log(`Sending config for "${payload.printerId}" on "${payload.ssid}"…`);
@@ -480,6 +592,8 @@ async function startOver() {
   setProgress(0);
   el.configForm.reset();
   $('inputPollInterval').value = '10';
+  populateDeviceSelect([]);
+  prefillSavedConfig();
   setLed('');
   log('Ready for the next device.');
   setStep(1);
@@ -502,6 +616,9 @@ function init() {
   el.configForm.addEventListener('submit', provision);
   el.btnStartOver.addEventListener('click', startOver);
   el.btnTogglePass.addEventListener('click', togglePassword);
+  el.btnLoadDevices.addEventListener('click', loadDevices);
+  el.printerSelect.addEventListener('change', onPrinterSelectChange);
+  el.inputServerUrl.addEventListener('change', loadDevices);
 
   // If the user unplugs the device, reset back to a clean state.
   navigator.serial.addEventListener('disconnect', (e) => {
@@ -510,6 +627,7 @@ function init() {
     }
   });
 
+  prefillSavedConfig();
   setStep(1);
 }
 

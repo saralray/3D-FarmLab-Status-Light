@@ -201,6 +201,13 @@
                   </button>
                 </div>
               </div>
+              <div class="form-group">
+                <label class="checkbox-label" for="inputRemember">
+                  <input type="checkbox" id="inputRemember" checked />
+                  <span>Remember WiFi &amp; server URL on this device</span>
+                </label>
+                <span class="form-hint">Saved locally in this browser so you don't retype them for the next light.</span>
+              </div>
               <div class="form-divider"></div>
               <div class="form-group">
                 <label for="inputServerUrl">PrintFarm server URL</label>
@@ -209,8 +216,16 @@
               </div>
               <div class="form-group">
                 <label for="inputPrinterId">Printer ID</label>
+                <div class="field-row">
+                  <select id="printerSelect" class="printer-select" disabled aria-label="Pick a printer from the server">
+                    <option value="">Load devices from server…</option>
+                  </select>
+                  <button type="button" class="btn-icon" id="btnLoadDevices" title="Load device list from server" aria-label="Load device list from server">
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 10a7 7 0 1 1-2.1-5M17 3v4h-4"/></svg>
+                  </button>
+                </div>
                 <input type="text" id="inputPrinterId" placeholder="e.g. printer-01" required />
-                <span class="form-hint">Matches the printer ID in your dashboard.</span>
+                <span class="form-hint">Pick from the list above, or type the printer ID manually.</span>
               </div>
               <div class="form-group">
                 <label for="inputPollInterval">Poll interval (seconds)</label>

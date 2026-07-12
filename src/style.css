@@ -747,6 +747,76 @@ body::after {
   background: var(--ink);
 }
 
+.form-group select {
+  width: 100%;
+  padding: 12px 15px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease), background 0.2s var(--ease);
+}
+
+.form-group select:focus {
+  border-color: var(--go);
+  box-shadow: 0 0 0 3px var(--go-soft);
+  background: var(--ink);
+}
+
+.form-group select:disabled { color: var(--text-mute); cursor: not-allowed; }
+
+/* Checkbox row (e.g. "remember on this device") */
+.checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 9px;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  font-family: var(--body) !important;
+  font-size: 0.88rem !important;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px; height: 16px;
+  accent-color: var(--go);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Select + icon-button row (device picker) */
+.field-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.field-row .printer-select { flex: 1; }
+
+.btn-icon {
+  flex-shrink: 0;
+  width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease, transform 0.15s ease;
+}
+
+.btn-icon:hover { color: var(--go); border-color: var(--go); background: var(--go-soft); }
+.btn-icon:active { transform: translateY(1px); }
+.btn-icon:focus-visible { outline: 2px solid var(--go); outline-offset: 2px; }
+.btn-icon:disabled { color: var(--text-mute); cursor: not-allowed; background: var(--panel-2); border-color: var(--line); }
+.btn-icon.loading svg { animation: spin 0.8s linear infinite; }
+
 .form-hint {
   display: block;
   margin-top: 7px;
