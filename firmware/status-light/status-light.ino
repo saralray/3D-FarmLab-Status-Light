@@ -15,12 +15,11 @@
  *
  * Hardware:
  *   - ESP32-C3 (Super Mini or Dev Module)
- *   - Common-cathode RGB LED: R/G/B legs on GPIO3/4/5, common leg to GND
+ *   - Common-cathode RGB LED: R/G/B legs on GPIO3/4/5, common leg to GND,
+ *     driven as plain digital on/off outputs (no PWM)
  *
  * Libraries (install via Arduino Library Manager):
  *   - ArduinoJson (v7+)
- *
- * Requires Arduino-ESP32 core 3.x (ledcAttach/ledcWrite pin-based PWM API).
  *
  * License: MIT
  */
@@ -81,10 +80,11 @@ void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(500);  // Allow serial to initialize
 
-  // Initialize LED PWM channels
-  ledcAttach(LED_PIN_R, LED_PWM_FREQ, LED_PWM_RESOLUTION);
-  ledcAttach(LED_PIN_G, LED_PWM_FREQ, LED_PWM_RESOLUTION);
-  ledcAttach(LED_PIN_B, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  // Drive the RGB legs as plain digital outputs (common-cathode: HIGH = on).
+  // Matches the known-good bench test; no PWM, so no core-3.x ledc dependency.
+  pinMode(LED_PIN_R, OUTPUT);
+  pinMode(LED_PIN_G, OUTPUT);
+  pinMode(LED_PIN_B, OUTPUT);
   ledOff();
 
   Serial.println();
@@ -445,13 +445,14 @@ void updateLED() {
 }
 
 // ── Raw output ───────────────────────────────────────────────────────────────
-// Scales by LED_BRIGHTNESS and writes each channel's PWM duty cycle.
-// Common-cathode: higher duty = brighter, no inversion needed.
+// Digital on/off per channel — no PWM. Common-cathode: HIGH = on, no inversion.
+// A channel lights when its requested level clears LED_ON_THRESHOLD, so
+// brightness-scaled animations (breathing, rainbow) still switch cleanly.
 
 void setRGB(uint8_t r, uint8_t g, uint8_t b) {
-  ledcWrite(LED_PIN_R, (uint16_t)r * LED_BRIGHTNESS / 255);
-  ledcWrite(LED_PIN_G, (uint16_t)g * LED_BRIGHTNESS / 255);
-  ledcWrite(LED_PIN_B, (uint16_t)b * LED_BRIGHTNESS / 255);
+  digitalWrite(LED_PIN_R, r > LED_ON_THRESHOLD ? HIGH : LOW);
+  digitalWrite(LED_PIN_G, g > LED_ON_THRESHOLD ? HIGH : LOW);
+  digitalWrite(LED_PIN_B, b > LED_ON_THRESHOLD ? HIGH : LOW);
 }
 
 // ── Solid color ─────────────────────────────────────────────────────────────

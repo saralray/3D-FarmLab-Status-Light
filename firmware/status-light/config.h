@@ -6,15 +6,13 @@
 #define FW_NAME             "3D-FarmLab-Status-Light"
 
 // ─── LED Configuration ──────────────────────────────────────────────────────
-// Discrete common-cathode RGB LED (3 color legs + shared GND), driven via
-// PWM on 3 GPIOs — NOT an addressable WS2812B. GPIO2/8/9 are ESP32-C3
-// strapping pins (boot mode) and are avoided here.
+// Discrete common-cathode RGB LED (3 color legs + shared GND), driven with
+// plain digital on/off on 3 GPIOs — NOT an addressable WS2812B, NOT PWM.
+// GPIO2/8/9 are ESP32-C3 strapping pins (boot mode) and are avoided here.
 #define LED_PIN_R           3          // Red leg, via current-limiting resistor
 #define LED_PIN_G           4          // Green leg, via current-limiting resistor
 #define LED_PIN_B           5          // Blue leg, via current-limiting resistor
-#define LED_PWM_FREQ        5000       // Hz, above flicker threshold
-#define LED_PWM_RESOLUTION  8          // bits — duty cycle range 0-255
-#define LED_BRIGHTNESS      255        // 0–255, full brightness
+#define LED_ON_THRESHOLD    127        // channel level (0-255) above which leg turns on
 
 // ─── Network Defaults ───────────────────────────────────────────────────────
 #define DEFAULT_POLL_INTERVAL_MS  10000   // 10 seconds
