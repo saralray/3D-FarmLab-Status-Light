@@ -411,10 +411,6 @@ void setDeviceState(DeviceState newState) {
 }
 
 void updateLED() {
-  // Forced solid blue in every state (per request).
-  ledSolid(0, 0, 255);
-  return;
-
   switch (deviceState) {
     case STATE_PROVISIONING:
       ledRainbow();
