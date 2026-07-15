@@ -434,7 +434,7 @@ void updateLED() {
           ledSolid(COLOR_IDLE_R, COLOR_IDLE_G, COLOR_IDLE_B);
           break;
         case STATUS_PRINTING:
-          ledBreathing(COLOR_PRINTING_R, COLOR_PRINTING_G, COLOR_PRINTING_B, 1.0);
+          ledSolid(COLOR_PRINTING_R, COLOR_PRINTING_G, COLOR_PRINTING_B);
           break;
         case STATUS_PAUSED:
           ledSolid(COLOR_PAUSED_R, COLOR_PAUSED_G, COLOR_PAUSED_B);
