@@ -12,7 +12,6 @@
 #define LED_PIN_R           3          // Red leg, via current-limiting resistor
 #define LED_PIN_G           4          // Green leg, via current-limiting resistor
 #define LED_PIN_B           5          // Blue leg, via current-limiting resistor
-#define LED_ON_THRESHOLD    127        // channel level (0-255) above which leg turns on
 
 // ─── Network Defaults ───────────────────────────────────────────────────────
 #define DEFAULT_POLL_INTERVAL_MS  10000   // 10 seconds

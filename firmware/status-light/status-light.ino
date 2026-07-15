@@ -458,14 +458,14 @@ void updateLED() {
 }
 
 // ── Raw output ───────────────────────────────────────────────────────────────
-// Digital on/off per channel — no PWM. Common-cathode: HIGH = on, no inversion.
-// A channel lights when its requested level clears LED_ON_THRESHOLD, so
-// brightness-scaled animations (breathing, rainbow) still switch cleanly.
+// Pure digital on/off per channel — no PWM, no levels. Common-cathode:
+// HIGH = on, LOW = off, no inversion. Any nonzero channel value turns that
+// leg fully on, exactly like the bench sketch's digitalWrite(pin, HIGH).
 
 void setRGB(uint8_t r, uint8_t g, uint8_t b) {
-  digitalWrite(LED_PIN_R, r > LED_ON_THRESHOLD ? HIGH : LOW);
-  digitalWrite(LED_PIN_G, g > LED_ON_THRESHOLD ? HIGH : LOW);
-  digitalWrite(LED_PIN_B, b > LED_ON_THRESHOLD ? HIGH : LOW);
+  digitalWrite(LED_PIN_R, r ? HIGH : LOW);
+  digitalWrite(LED_PIN_G, g ? HIGH : LOW);
+  digitalWrite(LED_PIN_B, b ? HIGH : LOW);
 }
 
 // ── Solid color ─────────────────────────────────────────────────────────────
