@@ -85,6 +85,15 @@ void setup() {
   pinMode(LED_PIN_R, OUTPUT);
   pinMode(LED_PIN_G, OUTPUT);
   pinMode(LED_PIN_B, OUTPUT);
+
+  // Boot self-test: prove the LED hardware + wiring work under firmware.
+  // Same drive as the known-good bench sketch. If this stays dark, the
+  // problem is wiring/reflash, not the status logic.
+  Serial.println("[BOOT] LED self-test: R, G, B, white...");
+  setRGB(255, 0, 0);   delay(400);  // Red
+  setRGB(0, 255, 0);   delay(400);  // Green
+  setRGB(0, 0, 255);   delay(400);  // Blue
+  setRGB(255, 255, 255); delay(400);  // White
   ledOff();
 
   Serial.println();
