@@ -14,7 +14,7 @@
 #define LED_PIN_B           5          // Blue leg, via current-limiting resistor
 #define LED_PWM_FREQ        5000       // Hz, above flicker threshold
 #define LED_PWM_RESOLUTION  8          // bits — duty cycle range 0-255
-#define LED_BRIGHTNESS      200        // 0–255, bright enough to read across a room
+#define LED_BRIGHTNESS      255        // 0–255, full brightness
 
 // ─── Network Defaults ───────────────────────────────────────────────────────
 #define DEFAULT_POLL_INTERVAL_MS  10000   // 10 seconds
