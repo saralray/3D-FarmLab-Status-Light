@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# PlatformIO firmware build dir (the merged public/firmware/status-light.bin is
+# what's kept; the intermediate build tree is not).
+.pio/
 .DS_Store
 *.local
 .env
