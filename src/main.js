@@ -53,6 +53,11 @@ const el = {
   eyeIcon: $('eyeIcon'),
   inputRemember: $('inputRemember'),
   inputServerUrl: $('inputServerUrl'),
+  inputMqttTransport: $('inputMqttTransport'),
+  inputMqttHost: $('inputMqttHost'),
+  inputMqttPort: $('inputMqttPort'),
+  inputMqttUser: $('inputMqttUser'),
+  inputMqttPass: $('inputMqttPass'),
   inputPrinterId: $('inputPrinterId'),
   printerSelect: $('printerSelect'),
   btnLoadDevices: $('btnLoadDevices'),
@@ -158,7 +163,22 @@ function prefillSavedConfig() {
   if (saved.password) el.inputPassword.value = saved.password;
   if (saved.serverUrl) {
     el.inputServerUrl.value = saved.serverUrl;
+    syncMqttHostFromServerUrl();
     loadDevices();
+  }
+}
+
+// The MQTT broker runs on the dashboard host, so derive the broker host from the
+// entered server URL (the device's WiFi must reach it). Only auto-fill when the
+// field is empty so a manually-entered host is never clobbered.
+function syncMqttHostFromServerUrl() {
+  if (el.inputMqttHost.value.trim()) return;
+  const raw = el.inputServerUrl.value.trim();
+  if (!raw) return;
+  try {
+    el.inputMqttHost.value = new URL(raw).hostname;
+  } catch {
+    // Ignore an incomplete/invalid URL — the user can type the host manually.
   }
 }
 
@@ -538,18 +558,24 @@ async function provision(event) {
   setBusy(el.btnProvision, true);
   el.terminalContainer.open = true;
   try {
-    const seconds = Number($('inputPollInterval').value) || 10;
+    const transport = el.inputMqttTransport.value || 'tcp';
     const payload = {
       cmd: 'provision',
       ssid: $('inputSSID').value.trim(),
       password: el.inputPassword.value,
-      serverUrl: el.inputServerUrl.value.trim(),
+      // The device subscribes to the dashboard's MQTT broker for pushed status
+      // (server/statusLightBroker.js); no HTTP polling.
+      mqttTransport: transport,
+      mqttHost: el.inputMqttHost.value.trim(),
+      mqttPort: Number(el.inputMqttPort.value) || 1883,
+      mqttPath: '/mqtt',
+      mqttUsername: el.inputMqttUser.value.trim(),
+      mqttPassword: el.inputMqttPass.value,
       printerId: el.inputPrinterId.value.trim(),
-      pollInterval: Math.round(seconds * 1000),
     };
 
     if (el.inputRemember.checked) {
-      saveConfig({ ssid: payload.ssid, password: payload.password, serverUrl: payload.serverUrl });
+      saveConfig({ ssid: payload.ssid, password: payload.password, serverUrl: el.inputServerUrl.value.trim() });
     } else {
       clearSavedConfig();
     }
@@ -603,7 +629,8 @@ async function startOver() {
   el.progressContainer.style.display = 'none';
   setProgress(0);
   el.configForm.reset();
-  $('inputPollInterval').value = '10';
+  el.inputMqttPort.value = '1883';
+  el.inputMqttUser.value = 'statuslight';
   populateDeviceSelect([]);
   prefillSavedConfig();
   setLed('');
@@ -630,7 +657,10 @@ function init() {
   el.btnTogglePass.addEventListener('click', togglePassword);
   el.btnLoadDevices.addEventListener('click', loadDevices);
   el.printerSelect.addEventListener('change', onPrinterSelectChange);
-  el.inputServerUrl.addEventListener('change', loadDevices);
+  el.inputServerUrl.addEventListener('change', () => {
+    syncMqttHostFromServerUrl();
+    loadDevices();
+  });
 
   // If the user unplugs the device, reset back to a clean state.
   navigator.serial.addEventListener('disconnect', (e) => {
