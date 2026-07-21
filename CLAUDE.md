@@ -30,18 +30,19 @@ Web Serial requires a secure context (HTTPS, or `https://localhost`/browser flag
 
 `arduino-cli` is not assumed to be installed; use PlatformIO instead:
 
-1. Copy `firmware/status-light/status-light.ino` into a PlatformIO project as `src/main.cpp`, adding `#include <Arduino.h>` and forward prototypes for `processSerialCommand`/`clearConfig` (the `.ino` relies on the Arduino builder's automatic prototype generation, which PlatformIO's C++ build does not do).
-2. `platformio.ini`: `board = esp32-c3-devkitm-1`, `framework = arduino`, `lib_deps` = `bblanchon/ArduinoJson@^7` (the LED is a discrete PWM-driven RGB LED, not an addressable NeoPixel, so no LED library is needed). **Must** set `build_flags = -DARDUINO_USB_MODE=1 -DARDUINO_USB_CDC_ON_BOOT=1` — most ESP32-C3 "Super Mini" boards use the chip's native USB Serial/JTAG (enumerates as `303a:1001`, e.g. `/dev/ttyACM0`). Without `CDC_ON_BOOT`, the firmware's `Serial` goes to UART0 instead and the browser never sees any output. Requires Arduino-ESP32 core 3.x for the pin-based `ledcAttach`/`ledcWrite` PWM API used to drive the LED.
-3. `pio run`, then merge bootloader + partition table + `boot_app0` + app into a single image at offset `0x0` (the manifest and `src/main.js` both flash one binary at `0x0`):
-   ```
-   esptool.py --chip esp32c3 merge_bin -o status-light.bin \
-     --flash_mode dio --flash_freq 80m --flash_size 4MB \
-     0x0 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin
-   ```
-   A bare app `.bin` alone (offset `0x10000`) will flash but won't boot from `0x0`.
-4. Copy the merged `status-light.bin` into `public/firmware/`.
+A `platformio.ini` now lives in `firmware/status-light/` (with `src_dir = .`, so the single `.ino` in that folder is compiled directly — no "copy to `src/main.cpp`" step, and the sketch already declares all its function prototypes up front). Just:
 
-`public/firmware/manifest.json` declares the chip family (`ESP32-C3`) and the single part/offset the flasher writes.
+```bash
+cd firmware/status-light
+pio run
+```
+
+- `platformio.ini` pins `board = esp32-c3-devkitm-1`, `framework = arduino`, `lib_deps = bblanchon/ArduinoJson@^7`, and **must** set `build_flags = -DARDUINO_USB_MODE=1 -DARDUINO_USB_CDC_ON_BOOT=1` — most ESP32-C3 "Super Mini" boards use the chip's native USB Serial/JTAG (enumerates as `303a:1001`, e.g. `/dev/ttyACM0`). Without `CDC_ON_BOOT`, the firmware's `Serial` goes to UART0 and the browser never sees any output. (The MQTT client (esp-mqtt) and public-CA bundle (`esp_crt_bundle`) are part of the ESP-IDF bundled with the Arduino-ESP32 core — no extra `lib_deps`; the LED is driven with plain `digitalWrite`, so no LED library either.)
+- The post-build hook `scripts/merge_firmware.py` merges bootloader + partition table + `boot_app0` + app into a single image at offset `0x0` (a bare app `.bin` at `0x10000` alone won't boot from `0x0`) and writes it straight to `../../public/firmware/status-light.bin` — no manual copy. The `.pio/` build tree is git-ignored.
+
+`public/firmware/manifest.json` (esp-web-tools format) declares the chip family (`ESP32-C3`) and the single part (`status-light.bin` @ offset `0`) the flasher writes.
+
+> Building the ESP toolchain needs normal internet access to PlatformIO's package registry (`api.registry.platformio.org`) and Espressif's download servers — a restricted-egress CI/sandbox can't fetch them.
 
 ## Web flasher architecture (`src/main.js`)
 
