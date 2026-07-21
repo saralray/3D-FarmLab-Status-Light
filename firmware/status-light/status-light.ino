@@ -2,22 +2,24 @@
  * 3D FarmLab — ESP32-C3 Printer Status Light
  * ============================================
  *
- * Firmware that subscribes to a 3D printer farm dashboard's embedded MQTT
- * broker (server/statusLightBroker.js) for printer status and displays it via
- * a discrete common-cathode RGB LED, driven with plain digital on/off on 3
- * GPIOs.
+ * Firmware that reflects a 3D printer's status on a discrete common-cathode RGB
+ * LED (plain digital on/off on 3 GPIOs). It gets the status one of two ways,
+ * chosen at provisioning via the "mode" field:
+ *
+ *   - "mqtt" (default): subscribes to the dashboard's embedded MQTT broker
+ *       (server/statusLightBroker.js) topic printfarm/printers/<printerId>/status
+ *       (retained, plain string). Status is PUSHED. Publishes online →
+ *       printfarm/lights/<printerId>/availability on connect (offline is the LWT).
+ *   - "api": polls GET <serverUrl>/api/status-light/printers/<printerId> every
+ *       pollInterval ms over plain HTTP(S). Status is POLLED.
+ *
+ * Both talk to the same dashboard; pick whichever the network allows.
  *
  * Features:
- *   - Reads WiFi + MQTT broker config from NVS (non-volatile storage)
+ *   - Reads WiFi + mode + server/broker config from NVS (non-volatile storage)
  *   - Serial provisioning protocol (JSON commands at 115200 baud)
  *   - Non-blocking LED animations for each status
- *   - Auto-reconnect on WiFi loss (and MQTT reconnect via esp-mqtt)
- *   - Error state when the broker connection is lost
- *
- * Status is PUSHED, not polled: the device subscribes to
- *   printfarm/printers/<printerId>/status   (retained, plain string)
- * and publishes its own liveness to
- *   printfarm/lights/<printerId>/availability  (retained; also the MQTT LWT)
+ *   - Auto-reconnect on WiFi loss (MQTT reconnect via esp-mqtt; API re-polls)
  *
  * Hardware:
  *   - ESP32-C3 (Super Mini or Dev Module)
@@ -35,6 +37,8 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <mqtt_client.h>
 #if __has_include("esp_crt_bundle.h")
 #include "esp_crt_bundle.h"
@@ -49,19 +53,25 @@ Preferences prefs;
 // Config from NVS
 String cfgSSID          = "";
 String cfgPassword      = "";
+String cfgMode          = "mqtt";  // "mqtt" | "api"
+String cfgPrinterId     = "";
+// MQTT mode
 String cfgMqttTransport = "tcp";   // "tcp" | "ws" | "wss"
 String cfgMqttHost      = "";
 uint16_t cfgMqttPort    = DEFAULT_MQTT_PORT;
 String cfgMqttPath      = "/mqtt"; // ws/wss only
 String cfgMqttUser      = "";
 String cfgMqttPass      = "";
-String cfgPrinterId     = "";
+// API mode
+String cfgServerUrl     = "";
+uint32_t cfgPollInterval = DEFAULT_POLL_INTERVAL_MS;
 
 // Runtime state
 DeviceState  deviceState       = STATE_PROVISIONING;
 PrinterStatus printerStatus    = STATUS_UNKNOWN;
-unsigned long lastWifiAttempt  = 0;
 unsigned long stateEnteredAt   = 0;
+unsigned long lastPollTime     = 0;   // API mode
+int          consecutiveErrors = 0;   // API mode
 
 // MQTT
 esp_mqtt_client_handle_t mqttClient = nullptr;
@@ -74,14 +84,17 @@ String serialBuffer = "";
 
 // ─── Forward Declarations ───────────────────────────────────────────────────
 
+bool isApiMode();
 void loadConfig();
 void saveConfig();
 void clearConfig();
 void handleSerial();
 void processSerialCommand(const String& line);
 void connectWiFi();
+void startLink();
 void startMqtt();
 void stopMqtt();
+void pollPrinterStatus();
 void updateLED();
 void setDeviceState(DeviceState newState);
 PrinterStatus parseStatus(const String& s);
@@ -95,6 +108,14 @@ void ledBlink(uint8_t r, uint8_t g, uint8_t b, float freqHz);
 void ledTripleBlink(uint8_t r, uint8_t g, uint8_t b);
 void ledRainbow();
 void ledOff();
+
+bool isApiMode() { return cfgMode == "api"; }
+
+// True when the current mode has the config it needs to run.
+static bool configComplete() {
+  if (cfgSSID.length() == 0 || cfgPrinterId.length() == 0) return false;
+  return isApiMode() ? cfgServerUrl.length() > 0 : cfgMqttHost.length() > 0;
+}
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
@@ -124,15 +145,21 @@ void setup() {
   // Load config from NVS
   loadConfig();
 
-  if (cfgSSID.length() == 0 || cfgMqttHost.length() == 0 || cfgPrinterId.length() == 0) {
+  if (!configComplete()) {
     Serial.println("[BOOT] No configuration found. Entering provisioning mode.");
     Serial.println("[BOOT] Send JSON config via serial to provision this device.");
-    Serial.println("[BOOT] Example: {\"cmd\":\"provision\",\"ssid\":\"...\",\"password\":\"...\",\"mqttTransport\":\"tcp\",\"mqttHost\":\"10.0.0.5\",\"mqttPort\":1883,\"mqttUsername\":\"statuslight\",\"mqttPassword\":\"...\",\"printerId\":\"...\"}");
+    Serial.println("[BOOT] MQTT: {\"cmd\":\"provision\",\"mode\":\"mqtt\",\"ssid\":\"...\",\"password\":\"...\",\"mqttHost\":\"10.0.0.5\",\"mqttPort\":1883,\"mqttUsername\":\"statuslight\",\"mqttPassword\":\"...\",\"printerId\":\"...\"}");
+    Serial.println("[BOOT] API:  {\"cmd\":\"provision\",\"mode\":\"api\",\"ssid\":\"...\",\"password\":\"...\",\"serverUrl\":\"http://10.0.0.5:8080\",\"pollInterval\":10000,\"printerId\":\"...\"}");
     setDeviceState(STATE_PROVISIONING);
   } else {
     Serial.println("[BOOT] Configuration loaded:");
-    Serial.println("  SSID:        " + cfgSSID);
-    Serial.println("  MQTT:        " + cfgMqttTransport + "://" + cfgMqttHost + ":" + String(cfgMqttPort));
+    Serial.println("  Mode:        " + cfgMode);
+    if (isApiMode()) {
+      Serial.println("  Server:      " + cfgServerUrl);
+      Serial.println("  Poll:        " + String(cfgPollInterval) + "ms");
+    } else {
+      Serial.println("  MQTT:        " + cfgMqttTransport + "://" + cfgMqttHost + ":" + String(cfgMqttPort));
+    }
     Serial.println("  Printer ID:  " + cfgPrinterId);
     Serial.println();
     setDeviceState(STATE_WIFI_CONNECTING);
@@ -156,7 +183,7 @@ void loop() {
     case STATE_WIFI_CONNECTING:
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("[WIFI] Connected! IP: " + WiFi.localIP().toString());
-        startMqtt();  // moves to STATE_MQTT_CONNECTING
+        startLink();  // API → STATE_RUNNING; MQTT → STATE_MQTT_CONNECTING
       } else if (now - stateEnteredAt > WIFI_CONNECT_TIMEOUT_MS) {
         Serial.println("[WIFI] Connection timeout. Will retry in " + String(WIFI_RETRY_INTERVAL_MS / 1000) + "s");
         setDeviceState(STATE_WIFI_FAILED);
@@ -173,15 +200,21 @@ void loop() {
 
     case STATE_MQTT_CONNECTING:
     case STATE_RUNNING:
-    case STATE_MQTT_ERROR:
-      // If WiFi drops, tear down MQTT and go back to reconnecting WiFi. The
-      // MQTT connect/subscribe and status pushes are driven entirely by the
-      // esp-mqtt event handler; nothing to poll here.
+    case STATE_LINK_ERROR:
+      // If WiFi drops, tear down the link and go back to reconnecting WiFi.
       if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[WIFI] Disconnected! Reconnecting...");
-        stopMqtt();
+        stopMqtt();  // no-op in API mode
         setDeviceState(STATE_WIFI_CONNECTING);
         connectWiFi();
+        break;
+      }
+      // API mode polls here; MQTT mode is driven by the esp-mqtt event handler.
+      if (isApiMode() && (deviceState == STATE_RUNNING || deviceState == STATE_LINK_ERROR)) {
+        if (now - lastPollTime >= cfgPollInterval) {
+          pollPrinterStatus();
+          lastPollTime = now;
+        }
       }
       break;
   }
@@ -197,13 +230,16 @@ void loadConfig() {
   prefs.begin(NVS_NAMESPACE, true);  // Read-only
   cfgSSID          = prefs.getString(NVS_KEY_SSID, "");
   cfgPassword      = prefs.getString(NVS_KEY_PASSWORD, "");
+  cfgMode          = prefs.getString(NVS_KEY_MODE, "mqtt");
+  cfgPrinterId     = prefs.getString(NVS_KEY_PRINTER_ID, "");
   cfgMqttTransport = prefs.getString(NVS_KEY_MQTT_TRANS, "tcp");
   cfgMqttHost      = prefs.getString(NVS_KEY_MQTT_HOST, "");
   cfgMqttPort      = prefs.getUShort(NVS_KEY_MQTT_PORT, DEFAULT_MQTT_PORT);
   cfgMqttPath      = prefs.getString(NVS_KEY_MQTT_PATH, "/mqtt");
   cfgMqttUser      = prefs.getString(NVS_KEY_MQTT_USER, "");
   cfgMqttPass      = prefs.getString(NVS_KEY_MQTT_PASS, "");
-  cfgPrinterId     = prefs.getString(NVS_KEY_PRINTER_ID, "");
+  cfgServerUrl     = prefs.getString(NVS_KEY_SERVER_URL, "");
+  cfgPollInterval  = prefs.getUInt(NVS_KEY_POLL_INT, DEFAULT_POLL_INTERVAL_MS);
   prefs.end();
 }
 
@@ -211,13 +247,16 @@ void saveConfig() {
   prefs.begin(NVS_NAMESPACE, false);  // Read-write
   prefs.putString(NVS_KEY_SSID, cfgSSID);
   prefs.putString(NVS_KEY_PASSWORD, cfgPassword);
+  prefs.putString(NVS_KEY_MODE, cfgMode);
+  prefs.putString(NVS_KEY_PRINTER_ID, cfgPrinterId);
   prefs.putString(NVS_KEY_MQTT_TRANS, cfgMqttTransport);
   prefs.putString(NVS_KEY_MQTT_HOST, cfgMqttHost);
   prefs.putUShort(NVS_KEY_MQTT_PORT, cfgMqttPort);
   prefs.putString(NVS_KEY_MQTT_PATH, cfgMqttPath);
   prefs.putString(NVS_KEY_MQTT_USER, cfgMqttUser);
   prefs.putString(NVS_KEY_MQTT_PASS, cfgMqttPass);
-  prefs.putString(NVS_KEY_PRINTER_ID, cfgPrinterId);
+  prefs.putString(NVS_KEY_SERVER_URL, cfgServerUrl);
+  prefs.putUInt(NVS_KEY_POLL_INT, cfgPollInterval);
   prefs.end();
 }
 
@@ -263,28 +302,40 @@ void processSerialCommand(const String& line) {
   if (strcmp(cmd, "provision") == 0) {
     const char* ssid      = doc["ssid"] | "";
     const char* password  = doc["password"] | "";
+    const char* mode      = doc["mode"] | "mqtt";
+    const char* printerId = doc["printerId"] | "";
+    // MQTT fields
     const char* transport = doc["mqttTransport"] | "tcp";
     const char* host      = doc["mqttHost"] | "";
     uint16_t    port      = (uint16_t)(doc["mqttPort"] | DEFAULT_MQTT_PORT);
     const char* path      = doc["mqttPath"] | "/mqtt";
     const char* user      = doc["mqttUsername"] | "";
     const char* pass      = doc["mqttPassword"] | "";
-    const char* printerId = doc["printerId"] | "";
+    // API fields
+    const char* serverUrl = doc["serverUrl"] | "";
+    uint32_t    pollInt   = doc["pollInterval"] | DEFAULT_POLL_INTERVAL_MS;
 
-    if (strlen(ssid) == 0 || strlen(host) == 0 || strlen(printerId) == 0) {
-      Serial.println("{\"status\":\"error\",\"msg\":\"Missing required fields: ssid, mqttHost, printerId\"}");
+    const bool apiMode = strcmp(mode, "api") == 0;
+    if (strlen(ssid) == 0 || strlen(printerId) == 0 ||
+        (apiMode ? strlen(serverUrl) == 0 : strlen(host) == 0)) {
+      Serial.println(apiMode
+        ? "{\"status\":\"error\",\"msg\":\"Missing required fields: ssid, serverUrl, printerId\"}"
+        : "{\"status\":\"error\",\"msg\":\"Missing required fields: ssid, mqttHost, printerId\"}");
       return;
     }
 
     cfgSSID          = String(ssid);
     cfgPassword      = String(password);
+    cfgMode          = apiMode ? "api" : "mqtt";
+    cfgPrinterId     = String(printerId);
     cfgMqttTransport = String(transport);
     cfgMqttHost      = String(host);
     cfgMqttPort      = port;
     cfgMqttPath      = String(path);
     cfgMqttUser      = String(user);
     cfgMqttPass      = String(pass);
-    cfgPrinterId     = String(printerId);
+    cfgServerUrl     = String(serverUrl);
+    cfgPollInterval  = pollInt < 1000 ? DEFAULT_POLL_INTERVAL_MS : pollInt;
 
     saveConfig();
 
@@ -299,11 +350,17 @@ void processSerialCommand(const String& line) {
     JsonDocument resp;
     resp["status"]        = "ok";
     resp["firmware"]      = FW_VERSION;
+    resp["mode"]          = cfgMode;
     resp["ssid"]          = cfgSSID;
-    resp["mqttTransport"] = cfgMqttTransport;
-    resp["mqttHost"]      = cfgMqttHost;
-    resp["mqttPort"]      = cfgMqttPort;
     resp["printerId"]     = cfgPrinterId;
+    if (isApiMode()) {
+      resp["serverUrl"]   = cfgServerUrl;
+      resp["pollInterval"] = cfgPollInterval;
+    } else {
+      resp["mqttTransport"] = cfgMqttTransport;
+      resp["mqttHost"]    = cfgMqttHost;
+      resp["mqttPort"]    = cfgMqttPort;
+    }
     resp["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
     if (WiFi.status() == WL_CONNECTED) {
       resp["ip"] = WiFi.localIP().toString();
@@ -345,7 +402,18 @@ void connectWiFi() {
   Serial.println("[WIFI] Connecting to: " + cfgSSID);
 }
 
-// ─── MQTT ───────────────────────────────────────────────────────────────────
+// Start the status link for the configured mode once WiFi is up.
+void startLink() {
+  consecutiveErrors = 0;
+  if (isApiMode()) {
+    setDeviceState(STATE_RUNNING);
+    lastPollTime = 0;  // poll immediately
+  } else {
+    startMqtt();        // → STATE_MQTT_CONNECTING
+  }
+}
+
+// ─── MQTT mode ───────────────────────────────────────────────────────────────
 
 // mqtt://host:port for LAN, ws(s)://host:port/mqtt through nginx — the same
 // broker either way (server/statusLightBroker.js).
@@ -374,7 +442,7 @@ static void mqttEventHandler(void*, esp_event_base_t, int32_t eventId, void* eve
     case MQTT_EVENT_DISCONNECTED:
       // esp-mqtt auto-reconnects; reflect the drop for the LED until it's back.
       if (deviceState == STATE_RUNNING) {
-        setDeviceState(STATE_MQTT_ERROR);
+        setDeviceState(STATE_LINK_ERROR);
       }
       break;
     case MQTT_EVENT_DATA:
@@ -432,6 +500,62 @@ void stopMqtt() {
   }
 }
 
+// ─── API mode (HTTP polling) ─────────────────────────────────────────────────
+
+void pollPrinterStatus() {
+  // Build URL: <serverUrl>/api/status-light/printers/<printerId>
+  String url = cfgServerUrl;
+  if (url.endsWith("/")) {
+    url = url.substring(0, url.length() - 1);
+  }
+  url += "/api/status-light/printers/" + cfgPrinterId;
+
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+
+  // For https:// route through an explicit WiFiClientSecure. The response is a
+  // plain, non-secret status string, so trust-on-first-use (setInsecure) is an
+  // acceptable tradeoff for a device with no CA store to maintain.
+  WiFiClientSecure secureClient;
+  bool isHttps = url.startsWith("https://");
+  if (isHttps) {
+    secureClient.setInsecure();
+    http.begin(secureClient, url);
+  } else {
+    http.begin(url);
+  }
+  http.addHeader("Accept", "application/json");
+
+  int httpCode = http.GET();
+
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload);
+    if (!err) {
+      const char* statusStr = doc["status"] | "unknown";
+      printerStatus = parseStatus(String(statusStr));
+      consecutiveErrors = 0;
+      if (deviceState == STATE_LINK_ERROR) {
+        setDeviceState(STATE_RUNNING);
+      }
+    } else {
+      Serial.println("[HTTP] JSON parse error: " + String(err.c_str()));
+      consecutiveErrors++;
+    }
+  } else {
+    Serial.println("[HTTP] Error: " + String(httpCode) + " " + http.errorToString(httpCode));
+    consecutiveErrors++;
+  }
+
+  http.end();
+
+  if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS && deviceState != STATE_LINK_ERROR) {
+    Serial.println("[HTTP] " + String(MAX_CONSECUTIVE_ERRORS) + " consecutive errors — link error state");
+    setDeviceState(STATE_LINK_ERROR);
+  }
+}
+
 PrinterStatus parseStatus(const String& s) {
   if (s == "idle")     return STATUS_IDLE;
   if (s == "printing") return STATUS_PRINTING;
@@ -463,8 +587,8 @@ void updateLED() {
       ledBreathing(COLOR_ERROR_R, COLOR_ERROR_G, COLOR_ERROR_B, 0.5);  // Slow red pulse
       break;
 
-    case STATE_MQTT_ERROR:
-      ledTripleBlink(COLOR_MQTT_ERR_R, COLOR_MQTT_ERR_G, COLOR_MQTT_ERR_B);
+    case STATE_LINK_ERROR:
+      ledTripleBlink(COLOR_LINK_ERR_R, COLOR_LINK_ERR_G, COLOR_LINK_ERR_B);
       break;
 
     case STATE_RUNNING:
@@ -494,8 +618,7 @@ void updateLED() {
 
 // ── Raw output ───────────────────────────────────────────────────────────────
 // Pure digital on/off per channel — no PWM, no levels. Common-cathode:
-// HIGH = on, LOW = off, no inversion. Any nonzero channel value turns that
-// leg fully on, exactly like the bench sketch's digitalWrite(pin, HIGH).
+// HIGH = on, LOW = off, no inversion.
 
 void setRGB(uint8_t r, uint8_t g, uint8_t b) {
   digitalWrite(LED_PIN_R, r ? HIGH : LOW);
@@ -541,7 +664,6 @@ void ledBlink(uint8_t r, uint8_t g, uint8_t b, float freqHz) {
 void ledTripleBlink(uint8_t r, uint8_t g, uint8_t b) {
   unsigned long cycle = millis() % 2000;  // 2-second cycle
 
-  // Three 100ms blinks at 0, 300, 600ms, then dark for the rest
   bool on = false;
   if (cycle < 100)                      on = true;
   else if (cycle >= 300 && cycle < 400) on = true;
@@ -557,7 +679,6 @@ void ledTripleBlink(uint8_t r, uint8_t g, uint8_t b) {
 // ── Rainbow cycle (provisioning mode) ───────────────────────────────────────
 
 void hsvToRgb(uint16_t hue, uint8_t sat, uint8_t val, uint8_t& r, uint8_t& g, uint8_t& b) {
-  // hue: 0-359, sat/val: 0-255
   uint8_t region = hue / 60;
   uint8_t remainder = (hue % 60) * 255 / 60;
 
