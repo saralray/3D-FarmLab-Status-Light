@@ -53,11 +53,15 @@ const el = {
   eyeIcon: $('eyeIcon'),
   inputRemember: $('inputRemember'),
   inputServerUrl: $('inputServerUrl'),
+  inputMode: $('inputMode'),
+  mqttFields: $('mqttFields'),
+  apiFields: $('apiFields'),
   inputMqttTransport: $('inputMqttTransport'),
   inputMqttHost: $('inputMqttHost'),
   inputMqttPort: $('inputMqttPort'),
   inputMqttUser: $('inputMqttUser'),
   inputMqttPass: $('inputMqttPass'),
+  inputPollInterval: $('inputPollInterval'),
   inputPrinterId: $('inputPrinterId'),
   printerSelect: $('printerSelect'),
   btnLoadDevices: $('btnLoadDevices'),
@@ -180,6 +184,13 @@ function syncMqttHostFromServerUrl() {
   } catch {
     // Ignore an incomplete/invalid URL — the user can type the host manually.
   }
+}
+
+// Show the MQTT or API field group based on the selected status source.
+function updateModeFields() {
+  const api = el.inputMode.value === 'api';
+  el.mqttFields.hidden = api;
+  el.apiFields.hidden = !api;
 }
 
 // ─── Browser support ──────────────────────────────────────────────────────────
@@ -558,21 +569,43 @@ async function provision(event) {
   setBusy(el.btnProvision, true);
   el.terminalContainer.open = true;
   try {
-    const transport = el.inputMqttTransport.value || 'tcp';
+    const mode = el.inputMode.value === 'api' ? 'api' : 'mqtt';
+    const printerId = el.inputPrinterId.value.trim();
+    const serverUrl = el.inputServerUrl.value.trim();
     const payload = {
       cmd: 'provision',
+      mode,
       ssid: $('inputSSID').value.trim(),
       password: el.inputPassword.value,
-      // The device subscribes to the dashboard's MQTT broker for pushed status
-      // (server/statusLightBroker.js); no HTTP polling.
-      mqttTransport: transport,
-      mqttHost: el.inputMqttHost.value.trim(),
-      mqttPort: Number(el.inputMqttPort.value) || 1883,
-      mqttPath: '/mqtt',
-      mqttUsername: el.inputMqttUser.value.trim(),
-      mqttPassword: el.inputMqttPass.value,
-      printerId: el.inputPrinterId.value.trim(),
+      printerId,
     };
+    if (mode === 'api') {
+      // The device polls GET <serverUrl>/api/status-light/printers/<id> on
+      // the interval; no broker involved.
+      const seconds = Number(el.inputPollInterval.value) || 10;
+      payload.serverUrl = serverUrl;
+      payload.pollInterval = Math.round(seconds * 1000);
+    } else {
+      // The device subscribes to the dashboard's MQTT broker for pushed status
+      // (server/statusLightBroker.js).
+      payload.mqttTransport = el.inputMqttTransport.value || 'tcp';
+      payload.mqttHost = el.inputMqttHost.value.trim() || (() => {
+        try { return new URL(serverUrl).hostname; } catch { return ''; }
+      })();
+      payload.mqttPort = Number(el.inputMqttPort.value) || 1883;
+      payload.mqttPath = '/mqtt';
+      payload.mqttUsername = el.inputMqttUser.value.trim();
+      payload.mqttPassword = el.inputMqttPass.value;
+    }
+
+    // Validate the mode-specific requirement (fields may be hidden, so the
+    // browser's `required` can't cover them).
+    if (mode === 'api' && !serverUrl) {
+      throw new Error('Enter the PrintFarm server URL for API mode.');
+    }
+    if (mode === 'mqtt' && !payload.mqttHost) {
+      throw new Error('Enter the MQTT broker host (or a server URL to derive it) for MQTT mode.');
+    }
 
     if (el.inputRemember.checked) {
       saveConfig({ ssid: payload.ssid, password: payload.password, serverUrl: el.inputServerUrl.value.trim() });
@@ -631,6 +664,8 @@ async function startOver() {
   el.configForm.reset();
   el.inputMqttPort.value = '1883';
   el.inputMqttUser.value = 'statuslight';
+  el.inputPollInterval.value = '10';
+  updateModeFields();
   populateDeviceSelect([]);
   prefillSavedConfig();
   setLed('');
@@ -657,6 +692,8 @@ function init() {
   el.btnTogglePass.addEventListener('click', togglePassword);
   el.btnLoadDevices.addEventListener('click', loadDevices);
   el.printerSelect.addEventListener('change', onPrinterSelectChange);
+  el.inputMode.addEventListener('change', updateModeFields);
+  updateModeFields();
   el.inputServerUrl.addEventListener('change', () => {
     syncMqttHostFromServerUrl();
     loadDevices();

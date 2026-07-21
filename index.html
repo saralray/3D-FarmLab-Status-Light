@@ -212,7 +212,7 @@
               <div class="form-group">
                 <label for="inputServerUrl">PrintFarm server URL</label>
                 <input type="url" id="inputServerUrl" placeholder="https://farm.example.com" required />
-                <span class="form-hint">The base URL of your 3D FarmLab dashboard.</span>
+                <span class="form-hint">The base URL of your 3D FarmLab dashboard — used to load the printer list, and (in API mode) polled by the device.</span>
               </div>
               <div class="form-group">
                 <label for="inputPrinterId">Printer ID</label>
@@ -229,33 +229,55 @@
               </div>
               <div class="form-divider"></div>
               <div class="form-group">
-                <label for="inputMqttTransport">MQTT transport</label>
-                <select id="inputMqttTransport" class="printer-select">
-                  <option value="tcp" selected>tcp — raw MQTT on the LAN (port 1883)</option>
-                  <option value="ws">ws — MQTT over WebSocket at /mqtt</option>
-                  <option value="wss">wss — MQTT over TLS WebSocket at /mqtt</option>
+                <label for="inputMode">Status source</label>
+                <select id="inputMode" class="printer-select">
+                  <option value="mqtt" selected>MQTT — pushed from the dashboard broker (instant)</option>
+                  <option value="api">HTTP API — device polls the dashboard</option>
                 </select>
-                <span class="form-hint">Use <code>tcp</code> on the same LAN; <code>ws</code>/<code>wss</code> ride the dashboard's web port when only the site is reachable.</span>
+                <span class="form-hint">MQTT is pushed &amp; instant; HTTP API polls over plain HTTP(S). Both talk to the same dashboard — pick whichever your network allows.</span>
               </div>
-              <div class="form-group">
-                <label for="inputMqttHost">MQTT broker host</label>
-                <input type="text" id="inputMqttHost" placeholder="e.g. 10.0.0.5 or farm.example.com" required />
-                <span class="form-hint">The dashboard host the device's WiFi can reach (auto-filled from the server URL).</span>
+
+              <!-- MQTT-mode fields -->
+              <div id="mqttFields">
+                <div class="form-group">
+                  <label for="inputMqttTransport">MQTT transport</label>
+                  <select id="inputMqttTransport" class="printer-select">
+                    <option value="tcp" selected>tcp — raw MQTT on the LAN (port 1883)</option>
+                    <option value="ws">ws — MQTT over WebSocket at /mqtt</option>
+                    <option value="wss">wss — MQTT over TLS WebSocket at /mqtt</option>
+                  </select>
+                  <span class="form-hint">Use <code>tcp</code> on the same LAN; <code>ws</code>/<code>wss</code> ride the dashboard's web port when only the site is reachable.</span>
+                </div>
+                <div class="form-group">
+                  <label for="inputMqttHost">MQTT broker host</label>
+                  <input type="text" id="inputMqttHost" placeholder="e.g. 10.0.0.5 or farm.example.com" />
+                  <span class="form-hint">The dashboard host the device's WiFi can reach (auto-filled from the server URL).</span>
+                </div>
+                <div class="form-group">
+                  <label for="inputMqttPort">MQTT port</label>
+                  <input type="number" id="inputMqttPort" value="1883" min="1" max="65535" />
+                  <span class="form-hint">Raw TCP uses <code>MQTT_PORT</code> (default 1883); ws/wss use the dashboard's web port.</span>
+                </div>
+                <div class="form-group">
+                  <label for="inputMqttUser">MQTT username</label>
+                  <input type="text" id="inputMqttUser" value="statuslight" />
+                </div>
+                <div class="form-group">
+                  <label for="inputMqttPass">MQTT password</label>
+                  <input type="password" id="inputMqttPass" placeholder="shared broker credential" />
+                  <span class="form-hint">From the dashboard's <strong>Status Light</strong> card (admin) or <code>GET /api/status-light/provisioning</code>.</span>
+                </div>
               </div>
-              <div class="form-group">
-                <label for="inputMqttPort">MQTT port</label>
-                <input type="number" id="inputMqttPort" value="1883" min="1" max="65535" required />
-                <span class="form-hint">Raw TCP uses <code>MQTT_PORT</code> (default 1883); ws/wss use the dashboard's web port.</span>
+
+              <!-- API-mode fields -->
+              <div id="apiFields" hidden>
+                <div class="form-group">
+                  <label for="inputPollInterval">Poll interval (seconds)</label>
+                  <input type="number" id="inputPollInterval" value="10" min="2" max="300" />
+                  <span class="form-hint">How often the device polls the dashboard for status (2–300s).</span>
+                </div>
               </div>
-              <div class="form-group">
-                <label for="inputMqttUser">MQTT username</label>
-                <input type="text" id="inputMqttUser" value="statuslight" />
-              </div>
-              <div class="form-group">
-                <label for="inputMqttPass">MQTT password</label>
-                <input type="password" id="inputMqttPass" placeholder="shared broker credential" />
-                <span class="form-hint">From the dashboard's <strong>Status Light</strong> card (admin) or <code>GET /api/status-light/provisioning</code>.</span>
-              </div>
+
               <button type="submit" class="btn btn-primary btn-lg" id="btnProvision">
                 <svg width="19" height="19" viewBox="0 0 20 20" fill="currentColor"><path d="M17 10l-7 7-7-7 1.4-1.4L9 13.2V3h2v10.2l4.6-4.6L17 10z"/></svg>
                 Send configuration

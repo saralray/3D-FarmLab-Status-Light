@@ -2,7 +2,7 @@ ESP32-C3 Status Light — Web Flasher + Firmware
 
 Project Overview
 
-This repository implements a complete web-based flasher and firmware for an ESP32-C3-based status light that subscribes to a 3D printer farm dashboard's embedded MQTT broker and drives an RGB status LED (discrete common-cathode LED). The goal is a simple, secure, and friendly experience where users can flash a pre-built firmware binary from a Vercel-hosted static web app and provision WiFi + broker settings over serial immediately after flashing. (The 3D-FarmLab dashboard also has its own in-browser Status Light flash card — this standalone flasher is an alternative.)
+This repository implements a complete web-based flasher and firmware for an ESP32-C3-based status light that reflects a 3D printer farm dashboard's status on an RGB status LED (discrete common-cathode LED). The device gets its status either by subscribing to the dashboard's embedded MQTT broker or by polling the dashboard's HTTP API — chosen per device at provisioning. The goal is a simple, secure, and friendly experience where users can flash a pre-built firmware binary from a Vercel-hosted static web app and provision WiFi + status-source settings over serial immediately after flashing. (The 3D-FarmLab dashboard also has its own in-browser Status Light flash card — this standalone flasher is an alternative.)
 
 High-level deliverables
 
@@ -50,7 +50,7 @@ Key features
 
 Files (planned)
 
-- index.html — minimal single-page UI. Inputs for WiFi SSID/password, server URL (for the device picker), MQTT broker host/port/transport/credential, printer ID, and Flash button.
+- index.html — minimal single-page UI. Inputs for WiFi SSID/password, server URL (device picker + API mode), a **Status source** selector (MQTT or HTTP API), the MQTT broker host/port/transport/credential (MQTT mode) or poll interval (API mode), printer ID, and Flash button.
 - src/main.js — implements state machine: idle → connecting → flashing → provisioning → done. Handles Web Serial device selection, esptool-js flash sequence, and writes provisioning JSON after flash.
 - src/style.css — modern dark theme, responsive layout, and animations.
 
@@ -87,15 +87,17 @@ ESP32-C3 Arduino Firmware
 
 Purpose
 
-- Connect to configured WiFi and subscribe to the print farm dashboard's embedded MQTT broker to get pushed printer status for a configured printerId.
+- Connect to configured WiFi and get a printer's status one of two ways, chosen at provisioning via the "mode" field: subscribe to the dashboard's embedded MQTT broker (mode "mqtt", pushed) OR poll the dashboard's HTTP API (mode "api").
 - Map status to an RGB LED animation (colors + breathing/pulse effects) on 3 pins.
 - Support serial provisioning: listen on 115200 baud for a single JSON line with "cmd":"provision" and config fields to write to non-volatile storage.
 
 Main behavior
 
-- On boot, read config from NVS namespace (ssid, password, mqttTransport, mqttHost, mqttPort, mqttPath, mqttUsername, mqttPassword, printerId). If missing, blink/pulse LED to indicate unconfigured state and wait for provisioning.
+- On boot, read config from NVS namespace (ssid, password, mode, printerId, plus the fields for the chosen mode). If missing, blink/pulse LED to indicate unconfigured state and wait for provisioning.
 - Attempt to connect to WiFi with retry logic. During WiFi/broker connect, LED shows cyan blink.
-- Once connected, subscribe to printfarm/printers/<printerId>/status (retained, plain string). The broker pushes the status; the device does not poll. Publishes online → printfarm/lights/<printerId>/availability on connect (retained; offline is the MQTT LWT).
+- Once WiFi is up, branch on mode:
+  - mqtt: subscribe to printfarm/printers/<printerId>/status (retained, plain string) — the broker pushes the status. Publishes online → printfarm/lights/<printerId>/availability on connect (retained; offline is the MQTT LWT).
+  - api: poll GET <serverUrl>/api/status-light/printers/<printerId> every pollInterval ms; expect {"status": "..."}.
 
   status ∈ idle|printing|paused|error|offline
 
@@ -106,11 +108,12 @@ Main behavior
   - error → Red (fast pulse)
   - offline → Dim white (slow pulse)
   - WiFi/MQTT connecting → Cyan (fast pulse/blink)
-  - Broker lost → Red triple blink
+  - Link lost (broker dropped or polls failing) → Red triple blink
 
-- On receiving serial provisioning JSON line:
+- On receiving a serial provisioning JSON line (one of):
 
-  {"cmd":"provision","ssid":"...","password":"...","mqttTransport":"tcp","mqttHost":"...","mqttPort":1883,"mqttUsername":"statuslight","mqttPassword":"...","printerId":"..."}
+  {"cmd":"provision","mode":"mqtt","ssid":"...","password":"...","mqttTransport":"tcp","mqttHost":"...","mqttPort":1883,"mqttUsername":"statuslight","mqttPassword":"...","printerId":"..."}
+  {"cmd":"provision","mode":"api","ssid":"...","password":"...","serverUrl":"http://host:8080","pollInterval":10000,"printerId":"..."}
 
   Validate, write to NVS, respond with {"status":"ok","msg":"Config saved. Rebooting..."} and reboot.
 
@@ -149,7 +152,8 @@ Serial provisioning protocol (post-flash)
 
 - After flashing completes, the web flasher opens a serial connection at 115200 baud and sends a single JSON line (newline-terminated) with the provisioning command:
 
-  {"cmd":"provision","ssid":"MyNetwork","password":"secret123","mqttTransport":"tcp","mqttHost":"10.0.0.5","mqttPort":1883,"mqttUsername":"statuslight","mqttPassword":"<shared broker credential>","printerId":"printer-01"}
+  MQTT mode: {"cmd":"provision","mode":"mqtt","ssid":"MyNetwork","password":"secret123","mqttTransport":"tcp","mqttHost":"10.0.0.5","mqttPort":1883,"mqttUsername":"statuslight","mqttPassword":"<shared broker credential>","printerId":"printer-01"}
+  API mode:  {"cmd":"provision","mode":"api","ssid":"MyNetwork","password":"secret123","serverUrl":"http://10.0.0.5:8080","pollInterval":10000,"printerId":"printer-01"}
 
 - Firmware responds with a JSON status line, e.g.:
 
